@@ -157,20 +157,19 @@ func TestConcurrentMetricUpdates(t *testing.T) {
 }
 
 func TestMetricMethodsWithNilCollector(t *testing.T) {
-	// 確保如果 collector 是 nil，方法不會 panic
-	// 這是防禦性測試
-	var collector *Collector
+	// 測試 nil collector 的防禦性行為
+	// 實際上，nil collector 調用方法會 panic，這是 Go 的標準行為
+	// 本測試驗證正常的 collector 可以安全調用所有方法
+	collector := NewCollector()
 
-	// 這些調用會 panic，但我們可以測試非 nil collector
-	if collector != nil {
-		collector.RecordEnqueue()
-		collector.RecordDispatch()
-		collector.RecordCompleted(1.0)
-		collector.RecordFailed()
-		collector.RecordDead()
-		collector.SetRecoveryTime(1.0)
-		collector.UpdateQueueStats(10, 5)
-	}
+	// 驗證所有方法都可以安全調用
+	collector.RecordEnqueue()
+	collector.RecordDispatch()
+	collector.RecordCompleted(1.0)
+	collector.RecordFailed()
+	collector.RecordDead()
+	collector.SetRecoveryTime(1.0)
+	collector.UpdateQueueStats(10, 5)
 }
 
 func TestCollectorIsolation(t *testing.T) {
