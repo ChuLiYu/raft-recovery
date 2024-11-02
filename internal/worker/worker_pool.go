@@ -43,7 +43,7 @@
 //   - Mutex: 保護 started/stopped 狀態
 //
 // 錯誤處理:
-//   - ErrPoolNotStart: Pool 未啟動時提交任務
+//   - ErrPoolNotStarted: Pool 未啟動時提交任務
 //   - ErrPoolClosed: Pool 已關閉時提交任務
 //   - 任務超時由 Worker 內部的 Context 處理
 //
@@ -76,8 +76,8 @@ import (
 var (
 	// ErrPoolClosed 表示當前 Pool 已關閉，無法提交新任務
 	ErrPoolClosed = errors.New("worker pool is closed")
-	// ErrPoolNotStart 表示 Pool 尚未啟動，無法提交任務
-	ErrPoolNotStart = errors.New("worker pool not started")
+	// ErrPoolNotStarted 表示 Pool 尚未啟動，無法提交任務
+	ErrPoolNotStarted = errors.New("worker pool not started")
 )
 
 // ============================================================================
@@ -206,7 +206,7 @@ func (p *Pool) Submit(task Task) error {
 	p.mu.Lock()
 	if !p.started {
 		p.mu.Unlock()
-		return ErrPoolNotStart // Pool 尚未啟動
+		return ErrPoolNotStarted // Pool 尚未啟動
 	}
 	if p.stopped {
 		p.mu.Unlock()

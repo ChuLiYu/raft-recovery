@@ -325,7 +325,7 @@ func TestSubmitBeforeStart(t *testing.T) {
 	}
 	err := pool.Submit(task)
 	assert.Error(t, err)
-	assert.Equal(t, ErrPoolNotStart, err)
+	assert.Equal(t, ErrPoolNotStarted, err)
 }
 
 // TestReceiveResultAfterStop 測試關閉後接收結果
