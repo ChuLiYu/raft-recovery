@@ -38,3 +38,6 @@ internal/storage/wal/test_*.log.*
 data/
 *.db
 *.sqlite
+
+# Scripts with dates (internal use only)
+scripts/commit_with_dates.sh
