@@ -8,7 +8,7 @@ package wal
 import (
 	"hash/crc32"
 
-	"github.com/ChuLiYu/beaver-raft/pkg/types"
+	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
 // CalculateChecksum 計算事件的 CRC32 校驗和

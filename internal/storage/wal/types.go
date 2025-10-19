@@ -1,6 +1,6 @@
 package wal
 
-import "github.com/ChuLiYu/beaver-raft/pkg/types"
+import "github.com/ChuLiYu/raft-recovery/pkg/types"
 
 // ============================================================================
 // WAL 型別定義

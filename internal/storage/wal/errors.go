@@ -84,4 +84,3 @@ func (e *CorruptionError) Unwrap() error {
 // 3. 防禦性編程：
 //    - 在關鍵路徑上使用 panic 還是回傳錯誤？
 //    - WAL 寫入失敗是否應該讓整個系統停止？
-
