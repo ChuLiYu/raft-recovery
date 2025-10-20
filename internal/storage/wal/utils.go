@@ -20,10 +20,12 @@ import (
 // - 驗證 WAL 完整性
 //
 // 參數：
-//   path - WAL 檔案路徑
+//
+//	path - WAL 檔案路徑
 //
 // 回傳：
-//   最後一個事件，錯誤（如果檔案為空則回傳 ErrEmptyWAL）
+//
+//	最後一個事件，錯誤（如果檔案為空則回傳 ErrEmptyWAL）
 func GetLastEvent(path string) (*Event, error) {
 	// TODO: 實作最後事件讀取
 	// 策略選擇：
@@ -42,7 +44,7 @@ func GetLastEvent(path string) (*Event, error) {
 	//   - 直接跳到最後一個事件
 	//
 	// 思考：哪種方案適合您的場景？
-	
+
 	return nil, nil
 }
 
@@ -57,7 +59,7 @@ func CountEvents(path string) (int, error) {
 	// 2. 使用 decoder 逐行讀取
 	// 3. 計數成功解析的事件
 	// 4. 忽略損壞的事件？還是回傳錯誤？
-	
+
 	return 0, nil
 }
 
@@ -69,7 +71,8 @@ func CountEvents(path string) (int, error) {
 // - seq 連續且無重複
 //
 // 回傳：
-//   錯誤（如果發現問題）
+//
+//	錯誤（如果發現問題）
 func ValidateWAL(path string) error {
 	// TODO: 實作 WAL 驗證
 	// 1. Replay 所有事件
@@ -81,7 +84,7 @@ func ValidateWAL(path string) error {
 	//        return error
 	//      lastSeq = event.Seq
 	// 4. 收集並回報所有錯誤（不只是第一個）
-	
+
 	return nil
 }
 
@@ -109,7 +112,7 @@ func RepairWAL(srcPath, dstPath string) error {
 	//    - 如何處理 checksum 錯誤但 JSON 有效的事件？
 	//    - 是否需要使用者確認？
 	//    - 是否記錄被移除的事件？
-	
+
 	return nil
 }
 
@@ -120,8 +123,9 @@ func RepairWAL(srcPath, dstPath string) error {
 // - 回滾錯誤的操作
 //
 // 參數：
-//   path - WAL 檔案路徑
-//   seq  - 保留到此序號（不包含）
+//
+//	path - WAL 檔案路徑
+//	seq  - 保留到此序號（不包含）
 func TruncateWAL(path string, seq uint64) error {
 	// TODO: 實作 WAL 截斷（選用）
 	// 1. 讀取所有事件
@@ -129,7 +133,7 @@ func TruncateWAL(path string, seq uint64) error {
 	// 3. 寫入新檔案
 	// 4. 原子替換舊檔案
 	// 5. 警告：確保操作的原子性！
-	
+
 	return nil
 }
 
@@ -149,7 +153,7 @@ func DumpWAL(path string, w io.Writer) error {
 	//    [Seq:1] ENQUEUE job-001 at 2024-01-01T00:00:00 (checksum:0x12345678)
 	//    [Seq:2] DISPATCH job-001 at 2024-01-01T00:00:01 (checksum:0x87654321)
 	// 3. 標記損壞的事件
-	
+
 	return nil
 }
 
@@ -165,7 +169,7 @@ func CompareWAL(path1, path2 string) ([]string, error) {
 	//    - 事件數量
 	//    - 每個事件的內容
 	// 3. 回傳差異列表
-	
+
 	return nil, nil
 }
 
@@ -175,12 +179,12 @@ func CompareWAL(path1, path2 string) ([]string, error) {
 
 // WALStats WAL 統計資訊
 type WALStats struct {
-	TotalEvents  int            // 總事件數
-	EventTypes   map[EventType]int // 各類型事件計數
-	FirstSeq     uint64         // 第一個事件的 seq
-	LastSeq      uint64         // 最後一個事件的 seq
-	TimeRange    [2]int64       // 時間範圍 [最早, 最晚]
-	CorruptedCount int          // 損壞事件數
+	TotalEvents    int               // 總事件數
+	EventTypes     map[EventType]int // 各類型事件計數
+	FirstSeq       uint64            // 第一個事件的 seq
+	LastSeq        uint64            // 最後一個事件的 seq
+	TimeRange      [2]int64          // 時間範圍 [最早, 最晚]
+	CorruptedCount int               // 損壞事件數
 }
 
 // GetWALStats 取得 WAL 的統計資訊
@@ -189,7 +193,7 @@ func GetWALStats(path string) (*WALStats, error) {
 	// 1. 掃描整個 WAL
 	// 2. 收集各種統計資料
 	// 3. 回傳 WALStats 結構
-	
+
 	return nil, nil
 }
 
@@ -210,4 +214,3 @@ func GetWALStats(path string) (*WALStats, error) {
 // 4. WAL 匯出：
 //    - 轉換成其他格式（CSV, Parquet）
 //    - 用於資料分析
-

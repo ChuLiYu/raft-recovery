@@ -23,8 +23,8 @@ type BatchWriter struct {
 	wal *WAL // 底層 WAL 實例
 
 	mu     sync.Mutex
-	buffer []Event      // 待寫入的事件緩衝
-	timer  *time.Timer  // 定時 flush 計時器
+	buffer []Event     // 待寫入的事件緩衝
+	timer  *time.Timer // 定時 flush 計時器
 
 	// 配置
 	maxBatchSize  int           // 緩衝區大小閾值
@@ -34,9 +34,10 @@ type BatchWriter struct {
 // NewBatchWriter 建立批次寫入器
 //
 // 參數：
-//   wal           - 底層 WAL 實例
-//   maxBatchSize  - 累積多少事件後立即 flush
-//   flushInterval - 最多等待多久就 flush（即使未滿）
+//
+//	wal           - 底層 WAL 實例
+//	maxBatchSize  - 累積多少事件後立即 flush
+//	flushInterval - 最多等待多久就 flush（即使未滿）
 func NewBatchWriter(wal *WAL, maxBatchSize int, flushInterval time.Duration) *BatchWriter {
 	// TODO: 實作建構函式
 	// 1. 建立 BatchWriter 結構
@@ -45,7 +46,7 @@ func NewBatchWriter(wal *WAL, maxBatchSize int, flushInterval time.Duration) *Ba
 	// 3. 思考：
 	//    - 如何優雅地停止背景 goroutine？
 	//    - 需要 context.Context 嗎？
-	
+
 	return nil
 }
 
@@ -66,7 +67,7 @@ func (bw *BatchWriter) Append(eventType EventType, jobID string) error {
 	// 4. 思考：
 	//    - Append 是否應該阻塞直到 flush 完成？
 	//    - 還是非同步 flush，立即回傳？
-	
+
 	return nil
 }
 
@@ -80,7 +81,7 @@ func (bw *BatchWriter) Flush() error {
 	// 5. 思考：
 	//    - 如果中途某個事件寫入失敗，如何處理？
 	//    - 已寫入的事件是否回滾？還是接受部分寫入？
-	
+
 	return nil
 }
 
@@ -90,7 +91,7 @@ func (bw *BatchWriter) Close() error {
 	// 1. 停止背景 goroutine
 	// 2. Flush 剩餘的緩衝事件
 	// 3. 不關閉底層 WAL（由呼叫者負責）
-	
+
 	return nil
 }
 
@@ -130,4 +131,3 @@ func (bw *BatchWriter) flushLoop() {
 //    - 如果崩潰時緩衝區有未寫入的事件，會遺失
 //    - 如何權衡效能與可靠性？
 //    - 關鍵任務系統可能不適合批次寫入
-
