@@ -1,19 +1,67 @@
-package jobmanager
-
 // ============================================================================
+// Beaver-Raft 任務管理器 - 任務狀態機實現
+// ============================================================================
+//
+// Package: internal/jobmanager
+// 文件: job_manager.go
+// 功能: 管理任務的完整生命週期和狀態轉換
+//
+// 設計理念:
+//   採用混合式設計，兼顧性能和一致性：
+//   1. jobs map - 統一的任務存儲，作為單一真實來源 (Single Source of Truth)
+//   2. 狀態索引 - pending queue、inFlight/completed/dead maps 提供快速查詢
+//   3. 兩者通過指針同步，確保狀態一致性
+//
+// 任務狀態轉換 (State Machine):
+//   Pending (待處理)
+//      ↓ PopPending() + MarkInFlight()
+//   InFlight (執行中)
+//      ↓ MarkCompleted() 或超時後 Requeue()
+//   Completed (已完成) / Dead (死信)
+//
+// 狀態轉換規則:
+//   - Pending → InFlight: 通過 PopPending() + MarkInFlight()
+//   - InFlight → Completed: 通過 MarkCompleted()
+//   - InFlight → Pending: 通過 Requeue() (失敗重試)
+//   - InFlight → Dead: 通過 MarkDead() (超過最大重試次數)
+//
+// 數據結構設計:
+//   jobs map[JobID]*Job - 主存儲，包含所有任務
+//   ├─ Job.Status 字段標識當前狀態
+//   └─ 通過狀態字段快速篩選不同狀態的任務
+//
+//   輔助索引（提升性能）:
+//   - queue []JobID - pending 任務隊列，保證 FIFO
+//   - inFlight map - 執行中任務索引
+//   - completed map - 已完成任務索引
+//   - dead map - 死信任務索引
+//
+// 並發安全:
+//   - 使用 sync.RWMutex 保護所有數據結構
+//   - 讀操作使用 RLock，寫操作使用 Lock
+//   - 確保多 goroutine 並發訪問的安全性
+//
+// 快照支持:
+//   - Snapshot() - 序列化當前所有任務狀態
+//   - Restore() - 從快照恢復任務狀態
+//   - 用於崩潰恢復和系統遷移
+//
 // 職責說明：
-// 1. 定義系統的統一狀態管理結構（單一 jobs map）
-// 2. 維護任務狀態轉換的完整性（Pending -> InFlight -> Completed/Dead）
-// 3. 提供任務生命週期管理方法
-// 4. 支援快照序列化與反序列化
+//   1. 定義系統的統一狀態管理結構（單一 jobs map）
+//   2. 維護任務狀態轉換的完整性（Pending -> InFlight -> Completed/Dead）
+//   3. 提供任務生命週期管理方法
+//   4. 支援快照序列化與反序列化
+//
 // ============================================================================
+
+package jobmanager
 
 import (
 	"errors"
 	"sync"
 	"time"
 
-	"github.com/ChuLiYu/beaver-raft/pkg/types"
+	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
 // ============================================================================
@@ -363,6 +411,26 @@ func (jm *JobManager) GetExpiredJobs(now time.Time) []types.JobID {
 	}
 
 	return expired
+}
+
+// GetAllInFlightJobs 取得所有執行中的任務 ID
+//
+// 返回值：
+//   - []types.JobID: 所有執行中任務的 ID 列表
+//
+// 用途：主要用於恢復時重新調度所有執行中的任務
+//
+// 併發安全：使用讀鎖保護
+func (jm *JobManager) GetAllInFlightJobs() []types.JobID {
+	jm.mu.RLock()
+	defer jm.mu.RUnlock()
+
+	var inFlightJobs []types.JobID
+	for jobID := range jm.inFlight {
+		inFlightJobs = append(inFlightJobs, jobID)
+	}
+
+	return inFlightJobs
 }
 
 // Stats 取得各狀態任務的統計資訊
