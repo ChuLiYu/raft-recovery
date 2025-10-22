@@ -1,3 +1,54 @@
+// ============================================================================
+// Beaver-Raft Worker - 任務執行單元
+// ============================================================================
+//
+// Package: internal/worker
+// 文件: worker.go
+// 功能: 實際執行任務的工作單元，每個 Worker 運行在獨立的 goroutine 中
+//
+// 工作原理:
+//   每個 Worker 是一個獨立的 goroutine，持續執行以下循環：
+//   1. 從 taskCh 接收任務（阻塞等待）
+//   2. 執行任務邏輯（帶超時控制）
+//   3. 將結果發送到 resultCh
+//   4. 重複上述過程，直到 taskCh 關閉
+//
+// 執行模型:
+//   ┌─────────────────────────────────────┐
+//   │  Worker Goroutine                   │
+//   │  ┌──────────────────────────────┐   │
+//   │  │ for task := range taskCh     │   │
+//   │  │   ├─ Context with timeout    │   │
+//   │  │   ├─ execute(task)            │   │
+//   │  │   └─ send result to resultCh │   │
+//   │  └──────────────────────────────┘   │
+//   └─────────────────────────────────────┘
+//
+// 超時控制:
+//   使用 context.WithTimeout 確保任務不會無限執行：
+//   - 每個任務有獨立的 Context
+//   - 超時後 Context.Done() channel 關閉
+//   - execute() 方法監聽 Done() channel
+//   - 超時返回 context.DeadlineExceeded 錯誤
+//
+// 任務執行邏輯 (模擬):
+//   當前實現為測試模擬：
+//   - 隨機延遲 0-500ms（模擬 CPU 密集型工作）
+//   - 10% 的失敗率（模擬真實環境中的錯誤）
+//   - 生產環境應替換為實際業務邏輯
+//
+// 錯誤處理:
+//   - 超時錯誤: ctx.Err() 返回 DeadlineExceeded
+//   - 執行失敗: 返回自定義錯誤
+//   - 所有錯誤都封裝在 Result 中返回
+//
+// 資源管理:
+//   - Context 在每次任務執行後調用 cancel() 釋放
+//   - 避免 Context 洩漏和資源浪費
+//   - Worker 退出時自動清理所有資源
+//
+// ============================================================================
+
 package worker
 
 import (
@@ -8,10 +59,11 @@ import (
 )
 
 // Worker 代表一個工作執行單元
+// 每個 Worker 運行在獨立的 goroutine 中，從任務通道接收任務並執行
 type Worker struct {
-	id       int           // Worker 唯一識別碼
-	taskCh   <-chan Task   // 任務通道（只讀）
-	resultCh chan<- Result // 結果通道（只寫）
+	id       int           // Worker 唯一識別碼，用於日誌和調試
+	taskCh   <-chan Task   // 任務通道（只讀），接收待執行的任務
+	resultCh chan<- Result // 結果通道（只寫），發送任務執行結果
 }
 
 // newWorker 建立新的 Worker 實例

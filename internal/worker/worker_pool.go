@@ -1,12 +1,68 @@
-package worker
-
 // ============================================================================
+// Beaver-Raft Worker Pool - 並發任務執行器
+// ============================================================================
+//
+// Package: internal/worker
+// 文件: worker_pool.go
+// 功能: 管理多個 Worker goroutine 的生命週期和任務分發
+//
+// 設計模式:
+//   採用 Worker Pool 模式（工作池模式）：
+//   1. 固定數量的 Worker goroutine 持續運行
+//   2. 通過共享的任務 channel 分發任務
+//   3. 通過結果 channel 收集執行結果
+//   4. 避免頻繁創建和銷毀 goroutine 的開銷
+//
+// 架構組件:
+//   ┌─────────────┐
+//   │ Controller  │ --Submit()--> taskCh
+//   └─────────────┘
+//         ↑
+//    GetResult()
+//         ↑
+//   ┌─────────────┐
+//   │   Pool      │
+//   │  ┌────────┐ │
+//   │  │Worker 1│←── taskCh
+//   │  │Worker 2│←── taskCh   ──→ resultCh
+//   │  │Worker 3│←── taskCh
+//   │  └────────┘ │
+//   └─────────────┘
+//
+// 生命週期:
+//   1. NewPool() - 創建 Pool，初始化 channels
+//   2. Start(n) - 啟動 n 個 Worker goroutines
+//   3. Submit(task) - 提交任務到 taskCh
+//   4. GetResult() - 從 resultCh 讀取結果
+//   5. Stop() - 關閉 taskCh，等待所有 Worker 完成
+//
+// 並發控制:
+//   - taskCh: 帶緩衝 channel，避免提交阻塞
+//   - resultCh: 帶緩衝 channel，避免結果處理阻塞
+//   - WaitGroup: 追蹤所有 Worker，確保優雅關閉
+//   - Mutex: 保護 started/stopped 狀態
+//
+// 錯誤處理:
+//   - ErrPoolNotStart: Pool 未啟動時提交任務
+//   - ErrPoolClosed: Pool 已關閉時提交任務
+//   - 任務超時由 Worker 內部的 Context 處理
+//
+// 優雅關閉:
+//   Stop() 流程：
+//   1. 關閉 taskCh，不再接受新任務
+//   2. Worker 處理完當前任務後退出
+//   3. WaitGroup.Wait() 等待所有 Worker 完成
+//   4. 標記 stopped = true
+//
 // 職責說明：
-// 1. 管理 N 個 Worker goroutine 的生命週期
-// 2. 接收 Controller 分派的任務，分發給可用 Worker
-// 3. 收集 Worker 執行結果，回傳給 Controller
-// 4. 優雅關閉（等待所有 Worker 完成）
+//   1. 管理 N 個 Worker goroutine 的生命週期
+//   2. 接收 Controller 分派的任務，分發給可用 Worker
+//   3. 收集 Worker 執行結果，回傳給 Controller
+//   4. 優雅關閉（等待所有 Worker 完成）
+//
 // ============================================================================
+
+package worker
 
 import (
 	"errors"

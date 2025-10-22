@@ -3,7 +3,7 @@ package worker
 import (
 	"time"
 
-	"github.com/ChuLiYu/beaver-raft/pkg/types"
+	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
 // Task 代表要執行的任務
