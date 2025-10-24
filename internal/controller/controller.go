@@ -1,12 +1,50 @@
-package controller
-
 // ============================================================================
+// Beaver-Raft 控制器 - 系統核心協調器
+// ============================================================================
+//
+// Package: internal/controller
+// 文件: controller.go
+// 功能: 系統核心控制器，協調所有模組，實現崩潰恢復和任務調度
+//
+// 架構設計:
+//   這是整個系統的"大腦"，負責協調以下組件：
+//   - JobManager: 任務狀態管理（pending/in_flight/completed/dead）
+//   - WAL: Write-Ahead Log，持久化所有操作，確保數據不丟失
+//   - Snapshot: 快照管理，定期保存系統狀態，加速恢復
+//   - WorkerPool: 工作線程池，實際執行任務
+//
+// 核心循環 (4 個並發 Goroutine):
+//   1. Dispatch Loop - 從 pending 隊列取任務分派給 worker
+//   2. Result Loop - 接收 worker 執行結果，更新任務狀態
+//   3. Timeout Loop - 定期掃描超時任務，重新排隊或標記為死信
+//   4. Snapshot Loop - 定期創建快照，確保快速恢復能力
+//
+// 崩潰恢復流程:
+//   啟動時自動執行：
+//   1. loadSnapshot() - 從最新快照恢復系統狀態
+//   2. replayWAL() - 重放 WAL 日誌，恢復快照後的操作
+//   3. requeueInFlightJobs() - 重新調度崩潰前執行中的任務
+//   目標: 實現 < 3 秒的恢復時間
+//
+// 冪等性保證:
+//   - 每個操作都先寫 WAL，再修改內存狀態
+//   - 恢復時跳過已完成的操作（通過 JobID 去重）
+//   - 確保系統狀態最終一致
+//
+// 並發安全:
+//   - 使用 sync.Mutex 保護 JobManager 的並發訪問
+//   - stopCh channel 用於優雅關閉所有循環
+//   - sync.WaitGroup 確保所有 goroutine 正確退出
+//
 // 職責說明：
-// 1. 協調所有模組（JobManager, WAL, Snapshot, WorkerPool）
-// 2. 實現四個核心循環：dispatch, result, timeout, snapshot
-// 3. 處理崩潰恢復（loadSnapshot -> replayWAL -> 重新調度）
-// 4. 確保狀態一致性與冪等性
+//   1. 協調所有模組（JobManager, WAL, Snapshot, WorkerPool）
+//   2. 實現四個核心循環：dispatch, result, timeout, snapshot
+//   3. 處理崩潰恢復（loadSnapshot -> replayWAL -> 重新調度）
+//   4. 確保狀態一致性與冪等性
+//
 // ============================================================================
+
+package controller
 
 import (
 	"fmt"
@@ -14,11 +52,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ChuLiYu/beaver-raft/internal/jobmanager"
-	"github.com/ChuLiYu/beaver-raft/internal/snapshot"
-	"github.com/ChuLiYu/beaver-raft/internal/storage/wal"
-	"github.com/ChuLiYu/beaver-raft/internal/worker"
-	"github.com/ChuLiYu/beaver-raft/pkg/types"
+	"github.com/ChuLiYu/raft-recovery/internal/jobmanager"
+	"github.com/ChuLiYu/raft-recovery/internal/snapshot"
+	"github.com/ChuLiYu/raft-recovery/internal/storage/wal"
+	"github.com/ChuLiYu/raft-recovery/internal/worker"
+	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
 var log = slog.Default()
@@ -47,6 +85,7 @@ type Controller struct {
 	pool       *worker.Pool           // Worker Pool
 	config     Config                 // 配置
 	stopCh     chan struct{}          // 停止訊號
+	stopped    bool                   // 標記是否已停止
 	startTime  time.Time              // 啟動時間（用於統計）
 	loopWg     sync.WaitGroup         // 等待所有循環退出
 }
@@ -111,8 +150,22 @@ func (c *Controller) Start() error {
 		return fmt.Errorf("replayWAL failed: %w", err)
 	}
 
+	// 將所有 in_flight 的任務重新放回隊列（因為這些任務在崩潰時未完成）
+	c.mu.Lock()
+	inFlightJobs := c.jobManager.GetAllInFlightJobs()
+	requeueCount := 0
+	for _, jobID := range inFlightJobs {
+		if err := c.jobManager.Requeue(jobID); err != nil {
+			log.Error("Failed to requeue in-flight job during recovery", "jobID", jobID, "error", err)
+		} else {
+			requeueCount++
+		}
+	}
+	c.mu.Unlock()
+
 	log.Info("Recovery completed",
-		"duration", time.Since(c.startTime))
+		"duration", time.Since(c.startTime),
+		"requeued_jobs", requeueCount)
 
 	// 2. 啟動 Worker Pool
 	if err := c.pool.Start(c.config.WorkerCount); err != nil {
@@ -520,7 +573,6 @@ func (c *Controller) GetStatus() map[string]interface{} {
 
 // Stop 優雅關閉 Controller
 
-//
 // ============================================================================
 // 關閉順序設計說明（與 Worker Pool Race Condition 相關）
 // ============================================================================
@@ -550,6 +602,15 @@ func (c *Controller) GetStatus() map[string]interface{} {
 //
 // ============================================================================
 func (c *Controller) Stop() {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		log.Info("Controller already stopped")
+		return
+	}
+	c.stopped = true
+	c.mu.Unlock()
+
 	log.Info("Stopping controller...")
 
 	// 1. 發送停止訊號給循環（優先級最高）
