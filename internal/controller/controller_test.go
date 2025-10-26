@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChuLiYu/beaver-raft/internal/storage/wal"
-	"github.com/ChuLiYu/beaver-raft/pkg/types"
+	"github.com/ChuLiYu/raft-recovery/internal/storage/wal"
+	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
 // ============================================================================
