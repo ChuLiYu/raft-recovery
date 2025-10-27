@@ -1,0 +1,21 @@
+# Beaver-Raft Configuration
+
+worker:
+  worker_count: 8
+  task_timeout: 3s
+
+wal:
+  dir: "./data/wal"
+  max_segment_size: 67108864
+  sync_interval: 10
+  retention_seconds: 86400
+  buffer_size: 100
+
+snapshot:
+  dir: "./data/snapshot"
+  interval_seconds: 30
+  retention_count: 5
+
+metrics:
+  enabled: true
+  port: 9090

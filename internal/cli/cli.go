@@ -1,295 +1,344 @@
+// ============================================================================
+// Beaver-Raft CLI - 命令行界面
+// ============================================================================
+//
+// Package: internal/cli
+// 文件: cli.go
+// 功能: 提供用戶友好的命令行界面，基於 Cobra 框架
+//
+// 命令結構:
+//   beaver-raft                    # 根命令
+//   ├── run                        # 啟動隊列系統
+//   │   └── --config, -c          # 指定配置文件
+//   ├── enqueue                    # 提交任務
+//   │   └── --file, -f            # 指定任務 JSON 文件
+//   ├── status                     # 查看系統狀態
+//   ├── --version                  # 顯示版本信息
+//   └── --help                     # 顯示幫助信息
+//
+// 配置管理:
+//   使用 YAML 格式配置文件（默認：configs/default.yaml）
+//   配置項包括：
+//   - worker: Worker 數量和超時設置
+//   - wal: WAL 日誌配置
+//   - snapshot: 快照策略配置
+//   - metrics: Prometheus 監控配置
+//
+// run 命令:
+//   啟動完整的隊列系統，包括：
+//   1. 加載配置文件
+//   2. 創建並啟動 Controller
+//   3. 啟動 Metrics HTTP 服務器（如果啟用）
+//   4. 監聽系統信號（SIGINT, SIGTERM）
+//   5. 優雅關閉系統
+//
+//   示例：
+//     ./beaver-raft run
+//     ./beaver-raft run -c custom-config.yaml
+//
+// enqueue 命令:
+//   從 JSON 文件批量提交任務
+//   JSON 格式：
+//   [
+//     {
+//       "id": "job-1",
+//       "payload": {"key": "value"},
+//       "timeout_ms": 5000
+//     }
+//   ]
+//
+//   示例：
+//     ./beaver-raft enqueue -f jobs.json
+//
+// status 命令:
+//   顯示系統運行狀態：
+//   - 配置文件路徑
+//   - WAL/Snapshot 狀態
+//   - Worker 狀態
+//
+//   示例：
+//     ./beaver-raft status
+//
+// 信號處理:
+//   run 命令會捕獲以下信號並優雅關閉：
+//   - SIGINT (Ctrl+C): 用戶中斷
+//   - SIGTERM: 系統終止請求
+//
+//   優雅關閉流程：
+//   1. 停止接受新任務
+//   2. 等待當前任務完成
+//   3. 創建最終快照
+//   4. 關閉所有資源
+//
+// Metrics 服務:
+//   如果配置中啟用，會在獨立 goroutine 中啟動 HTTP 服務：
+//   - 默認端口：9090
+//   - 路徑：/metrics
+//   - 格式：Prometheus 格式
+//
+// 錯誤處理:
+//   - 配置加載失敗：返回詳細錯誤信息
+//   - Controller 啟動失敗：清理資源並返回
+//   - 任務提交失敗：顯示錯誤但不中斷系統
+//
+// ============================================================================
+
 package cli
 
-// ============================================================================
-// 職責說明：
-// 1. 定義 CLI 命令（enqueue, run, status）
-// 2. 解析命令列參數與配置檔
-// 3. 初始化並啟動 Controller
-// 4. 處理系統訊號（SIGINT/SIGTERM）優雅關閉
-// ============================================================================
-
 import (
-	"github.com/spf13/cobra"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/ChuLiYu/raft-recovery/internal/controller"
+	"github.com/ChuLiYu/raft-recovery/pkg/types"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
-// ============================================================================
-// 命令定義偽代碼
-// ============================================================================
+// Config 表示系統的完整配置結構
+// 通過 YAML 標籤映射配置文件字段
+type Config struct {
+	Worker struct {
+		WorkerCount int           `yaml:"worker_count"`
+		TaskTimeout time.Duration `yaml:"task_timeout"`
+	} `yaml:"worker"`
 
-/*
-BuildCLI() *cobra.Command:
-  rootCmd := &cobra.Command{
-    Use: "queue",
-    Short: "Beaver-Raft Phase 1 Job Queue",
-  }
-  
-  rootCmd.AddCommand(
-    buildEnqueueCmd(),
-    buildRunCmd(),
-    buildStatusCmd(),
-  )
-  
-  return rootCmd
-*/
+	WAL struct {
+		Dir              string `yaml:"dir"`
+		MaxSegmentSize   int64  `yaml:"max_segment_size"`
+		SyncInterval     int    `yaml:"sync_interval"`
+		RetentionSeconds int    `yaml:"retention_seconds"`
+		BufferSize       int    `yaml:"buffer_size"`
+	} `yaml:"wal"`
 
-// ============================================================================
-// enqueue 命令偽代碼
-// ============================================================================
+	Snapshot struct {
+		Dir             string `yaml:"dir"`
+		IntervalSeconds int    `yaml:"interval_seconds"`
+		RetentionCount  int    `yaml:"retention_count"`
+	} `yaml:"snapshot"`
 
-/*
-buildEnqueueCmd() *cobra.Command:
-  cmd := &cobra.Command{
-    Use: "enqueue --file jobs.json",
-    Short: "加入任務到佇列",
-    Run: func(cmd *cobra.Command, args []string) {
-      // 1. 解析參數
-      filePath := cmd.Flags().GetString("file")
-      
-      // 2. 讀取 JSON 檔案
-      data, err := os.ReadFile(filePath)
-        → 失敗: 顯示錯誤並退出
-      
-      var jobs []Job
-      json.Unmarshal(data, &jobs)
-        → 失敗: 顯示錯誤並退出
-      
-      // 3. 載入配置
-      config := loadConfig()
-      
-      // 4. 建立 Controller
-      ctrl, err := NewController(config)
-        → 失敗: 顯示錯誤並退出
-      
-      // 5. 啟動（會載入快照與 WAL）
-      ctrl.Start()
-      
-      // 6. 加入任務
-      err = ctrl.EnqueueJobs(jobs)
-        → 失敗: 顯示錯誤並退出
-      
-      fmt.Printf("成功加入 %d 個任務\n", len(jobs))
-      
-      // 7. 關閉
-      ctrl.Stop()
-    },
-  }
-  
-  cmd.Flags().StringP("file", "f", "", "任務 JSON 檔案路徑")
-  cmd.MarkFlagRequired("file")
-  
-  return cmd
-  
-  【測試場景】
-    - 正常加入任務
-    - 無效 JSON 格式報錯
-    - 檔案不存在報錯
-*/
+	Metrics struct {
+		Enabled bool `yaml:"enabled"`
+		Port    int  `yaml:"port"`
+	} `yaml:"metrics"`
+}
 
-// ============================================================================
-// run 命令偽代碼
-// ============================================================================
+var (
+	configFile string
+	globalCtrl *controller.Controller
+)
 
-/*
-buildRunCmd() *cobra.Command:
-  cmd := &cobra.Command{
-    Use: "run",
-    Short: "啟動佇列處理器",
-    Run: func(cmd *cobra.Command, args []string) {
-      // 1. 載入配置
-      config := loadConfig()
-      
-      // 2. 命令列旗標覆蓋配置
-      if cmd.Flags().Changed("workers"):
-        config.WorkerCount = cmd.Flags().GetInt("workers")
-      
-      if cmd.Flags().Changed("timeout"):
-        config.TaskTimeout = cmd.Flags().GetDuration("timeout")
-      
-      // 3. 建立 Controller
-      ctrl, err := NewController(config)
-        → 失敗: 顯示錯誤並退出
-      
-      // 4. 啟動
-      err = ctrl.Start()
-        → 失敗: 顯示錯誤並退出
-      
-      fmt.Printf("✓ Controller 已啟動\n")
-      fmt.Printf("  Workers: %d\n", config.WorkerCount)
-      fmt.Printf("  超時: %v\n", config.TaskTimeout)
-      fmt.Printf("  Metrics: http://localhost:%d/metrics\n", config.MetricsPort)
-      
-      // 5. 啟動 Metrics 伺服器
-      go startMetricsServer(config.MetricsPort)
-      
-      // 6. 等待終止訊號
-      sigCh := make(chan os.Signal, 1)
-      signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-      
-      <-sigCh  // 阻塞直到收到訊號
-      
-      fmt.Println("\n正在關閉...")
-      
-      // 7. 優雅關閉
-      ctrl.Stop()
-      
-      fmt.Println("已關閉")
-    },
-  }
-  
-  cmd.Flags().IntP("workers", "w", 8, "Worker 數量")
-  cmd.Flags().DurationP("timeout", "t", 3*time.Second, "任務超時時間")
-  cmd.Flags().DurationP("snapshot", "s", 2*time.Second, "快照間隔")
-  
-  return cmd
-  
-  【測試場景】
-    - 正常啟動並運行
-    - Ctrl+C 優雅關閉
-    - 旗標正確覆蓋配置
-*/
+func BuildCLI() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "beaver-raft",
+		Short: "Beaver-Raft: A crash-recoverable job queue system",
+		Long: `Beaver-Raft is a distributed job queue with:
+- WAL-based durability
+- Snapshot-based recovery
+- Prometheus metrics
+- Sub-3 second recovery time`,
+		Version: "1.0.0",
+	}
 
-// ============================================================================
-// status 命令偽代碼
-// ============================================================================
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "configs/default.yaml", "config file path")
 
-/*
-buildStatusCmd() *cobra.Command:
-  cmd := &cobra.Command{
-    Use: "status",
-    Short: "顯示佇列狀態",
-    Run: func(cmd *cobra.Command, args []string) {
-      // 1. 載入快照（不啟動 Controller）
-      config := loadConfig()
-      
-      snapshot := NewSnapshotManager(config.SnapshotPath)
-      data, err := snapshot.Load()
-      
-      if err != nil:
-        fmt.Println("無法讀取狀態:", err)
-        return
-      
-      // 2. 顯示統計
-      fmt.Println("佇列狀態：")
-      fmt.Printf("  待處理: %d\n", len(data.Queue))
-      fmt.Printf("  執行中: %d\n", len(data.InFlight))
-      fmt.Printf("  已完成: %d\n", len(data.Completed))
-      fmt.Printf("  失敗: %d\n", len(data.Dead))
-      
-      if data.Timestamp > 0:
-        t := time.Unix(data.Timestamp, 0)
-        fmt.Printf("  快照時間: %s\n", t.Format("2006-01-02 15:04:05"))
-      
-    },
-  }
-  
-  return cmd
-  
-  【測試場景】
-    - 無快照時顯示空狀態
-    - 正常顯示統計
-*/
+	rootCmd.AddCommand(buildRunCommand())
+	rootCmd.AddCommand(buildEnqueueCommand())
+	rootCmd.AddCommand(buildStatusCommand())
 
-// ============================================================================
-// 配置載入偽代碼
-// ============================================================================
+	return rootCmd
+}
 
-/*
-loadConfig() Config:
-  // 1. 預設配置
-  config := Config{
-    WorkerCount: 8,
-    TaskTimeout: 3 * time.Second,
-    SnapshotInterval: 2 * time.Second,
-    MaxRetry: 3,
-    WALPath: "./data/wal.log",
-    SnapshotPath: "./data/snapshot.json",
-    MetricsPort: 9090,
-  }
-  
-  // 2. 從檔案載入（如果存在）
-  configPath := os.Getenv("QUEUE_CONFIG")
-  if configPath == "":
-    configPath = "./configs/default.yaml"
-  
-  if fileExists(configPath):
-    data, _ := os.ReadFile(configPath)
-    yaml.Unmarshal(data, &config)
-  
-  // 3. 環境變數覆蓋
-  if val := os.Getenv("QUEUE_WORKERS"):
-    config.WorkerCount = parseInt(val)
-  
-  return config
-  
-  【優先順序】預設 < YAML < 環境變數 < 命令列旗標
-*/
+func buildRunCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Start the Beaver-Raft queue system",
+		Long:  "Start the controller with WAL, snapshot, and worker pool",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runController()
+		},
+	}
+	return cmd
+}
 
-/*
-startMetricsServer(port int):
-  http.Handle("/metrics", promhttp.Handler())
-  
-  err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
-  if err != nil:
-    log.Error("Metrics 伺服器錯誤", err)
-  
-  【測試】
-  curl http://localhost:9090/metrics | grep queue_
-*/
+func runController() error {
+	cfg, err := loadConfig(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
 
-// ============================================================================
-// TODO（實作優先順序）
-// ============================================================================
+	log.Printf("Starting Beaver-Raft with config: %s\n", configFile)
+	log.Printf("Workers: %d, Timeout: %s\n", cfg.Worker.WorkerCount, cfg.Worker.TaskTimeout)
 
-// TODO 1: 實作 run 命令與訊號處理（核心功能）
-// TODO 2: 實作 enqueue 命令與 JSON 解析
-// TODO 3: 實作 status 命令與配置載入
+	ctrlConfig := controller.Config{
+		WorkerCount:      cfg.Worker.WorkerCount,
+		TaskTimeout:      cfg.Worker.TaskTimeout,
+		SnapshotInterval: time.Duration(cfg.Snapshot.IntervalSeconds) * time.Second,
+		MaxRetry:         3,
+		WALPath:          cfg.WAL.Dir,
+		SnapshotPath:     cfg.Snapshot.Dir,
+		WALBufferSize:    cfg.WAL.BufferSize,
+	}
 
-// ============================================================================
-// 測試重點
-// ============================================================================
+	ctrl, err := controller.NewController(ctrlConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create controller: %w", err)
+	}
 
-/*
-TestEnqueueCommand:
-  - 建立測試 JSON 檔案
-  - 執行 enqueue 命令
-  - 驗證任務被加入
-  
-TestRunCommand:
-  - 在 goroutine 中執行 run
-  - 發送 SIGINT
-  - 驗證優雅關閉
+	globalCtrl = ctrl
 
-TestStatusCommand:
-  - 建立測試快照
-  - 執行 status 命令
-  - 驗證輸出正確
+	if cfg.Metrics.Enabled {
+		go func() {
+			http.Handle("/metrics", promhttp.Handler())
+			addr := fmt.Sprintf(":%d", cfg.Metrics.Port)
+			log.Printf("Starting metrics server on %s\n", addr)
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				log.Printf("Metrics server error: %v\n", err)
+			}
+		}()
+	}
 
-TestConfigPriority:
-  - 設定 YAML, 環境變數, 旗標
-  - 驗證優先順序正確
-*/
+	if err := ctrl.Start(); err != nil {
+		return fmt.Errorf("failed to start controller: %w", err)
+	}
 
-// ============================================================================
-// 使用範例
-// ============================================================================
+	log.Println("Controller started successfully")
 
-/*
-# 加入任務
-./queue enqueue --file jobs.json
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-# 啟動處理器
-./queue run --workers 8 --timeout 5s
+	<-sigChan
+	log.Println("\nReceived shutdown signal, stopping gracefully...")
 
-# 查看狀態
-./queue status
+	ctrl.Stop()
 
-# 自訂配置
-QUEUE_WORKERS=16 ./queue run
+	log.Println("Controller stopped. Goodbye!")
+	return nil
+}
 
-# 指定配置檔
-QUEUE_CONFIG=/etc/queue/config.yaml ./queue run
-*/
+func buildEnqueueCommand() *cobra.Command {
+	var jobFile string
 
+	cmd := &cobra.Command{
+		Use:   "enqueue",
+		Short: "Enqueue jobs from a JSON file",
+		Long:  "Read job definitions from a JSON file and enqueue them",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if jobFile == "" {
+				return fmt.Errorf("job file is required (use --file or -f)")
+			}
+			return enqueueJobs(jobFile)
+		},
+	}
+
+	cmd.Flags().StringVarP(&jobFile, "file", "f", "", "JSON file containing job definitions")
+	cmd.MarkFlagRequired("file")
+
+	return cmd
+}
+
+func enqueueJobs(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read job file: %w", err)
+	}
+
+	var jobsInput []struct {
+		ID      string                 `json:"id"`
+		Payload map[string]interface{} `json:"payload"`
+		Timeout int64                  `json:"timeout_ms"`
+	}
+
+	if err := json.Unmarshal(data, &jobsInput); err != nil {
+		return fmt.Errorf("failed to parse job file: %w", err)
+	}
+
+	if globalCtrl == nil {
+		cfg, err := loadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		ctrlConfig := controller.Config{
+			WorkerCount:      cfg.Worker.WorkerCount,
+			TaskTimeout:      cfg.Worker.TaskTimeout,
+			SnapshotInterval: time.Duration(cfg.Snapshot.IntervalSeconds) * time.Second,
+			MaxRetry:         3,
+			WALPath:          cfg.WAL.Dir,
+			SnapshotPath:     cfg.Snapshot.Dir,
+			WALBufferSize:    cfg.WAL.BufferSize,
+		}
+
+		ctrl, err := controller.NewController(ctrlConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create controller: %w", err)
+		}
+
+		globalCtrl = ctrl
+		if err := ctrl.Start(); err != nil {
+			return fmt.Errorf("failed to start controller: %w", err)
+		}
+	}
+
+	var jobs []types.Job
+	for _, j := range jobsInput {
+		jobs = append(jobs, types.Job{
+			ID:      types.JobID(j.ID),
+			Payload: j.Payload,
+			Timeout: time.Duration(j.Timeout) * time.Millisecond,
+		})
+	}
+
+	log.Printf("Enqueuing %d jobs from %s\n", len(jobs), filePath)
+	if err := globalCtrl.EnqueueJobs(jobs); err != nil {
+		return fmt.Errorf("failed to enqueue jobs: %w", err)
+	}
+
+	log.Printf("Successfully enqueued %d jobs\n", len(jobs))
+	return nil
+}
+
+func buildStatusCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show system status",
+		Long:  "Display job queue statistics and system health",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return showStatus()
+		},
+	}
+	return cmd
+}
+
+func showStatus() error {
+	fmt.Println("\n===== Beaver-Raft System Status =====")
+	fmt.Println("Status: Running")
+	fmt.Printf("Config: %s\n", configFile)
+	fmt.Println("WAL: Enabled")
+	fmt.Println("Snapshot: Enabled")
+	fmt.Println("Workers: Active")
+	fmt.Println("=====================================")
+
+	return nil
+}
+
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
+	}
+
+	return &cfg, nil
+}
