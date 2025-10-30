@@ -1,0 +1,17 @@
+[
+  {
+    "id": "job-001",
+    "payload": {"task": "process_data", "value": 42},
+    "timeout_ms": 5000
+  },
+  {
+    "id": "job-002",
+    "payload": {"task": "send_email", "recipient": "user@example.com"},
+    "timeout_ms": 3000
+  },
+  {
+    "id": "job-003",
+    "payload": {"task": "backup_database", "target": "/backup/db"},
+    "timeout_ms": 10000
+  }
+]
