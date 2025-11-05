@@ -1,6 +1,6 @@
 # Beaver-Raft Test Coverage Report
 
-**English** | **[中文版](TEST_COVERAGE_REPORT.zh-CN.md)**
+English | [Chinese version](TEST_COVERAGE_REPORT.zh-CN.md)
 
 > Generated: 2025-10-31 | Phase 1 Complete
 
