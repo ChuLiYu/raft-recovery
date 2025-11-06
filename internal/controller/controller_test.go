@@ -11,17 +11,17 @@ import (
 )
 
 // ============================================================================
-// 測試輔助函數
+// Test Helper Functions
 // ============================================================================
 
-// createTestController 建立測試用的 Controller
+// createTestController creates a test Controller
 func createTestController(t *testing.T) (*Controller, string) {
 	t.Helper()
 
-	// 建立臨時目錄
+	// Create temporary directory
 	tmpDir, err := os.MkdirTemp("", "controller_test_*")
 	if err != nil {
-		t.Fatalf("建立臨時目錄失敗: %v", err)
+		t.Fatalf("Failed to create temp directory: %v", err)
 	}
 
 	config := Config{
@@ -36,13 +36,13 @@ func createTestController(t *testing.T) (*Controller, string) {
 
 	controller, err := NewController(config)
 	if err != nil {
-		t.Fatalf("建立 Controller 失敗: %v", err)
+		t.Fatalf("Failed to create Controller: %v", err)
 	}
 
 	return controller, tmpDir
 }
 
-// cleanup 清理測試資源
+// cleanup cleans up test resources
 func cleanup(t *testing.T, controller *Controller, tmpDir string) {
 	t.Helper()
 
@@ -55,7 +55,7 @@ func cleanup(t *testing.T, controller *Controller, tmpDir string) {
 	}
 }
 
-// waitForJobStatus 等待任務達到指定狀態
+// waitForJobStatus waits for a job to reach specified status
 func waitForJobStatus(t *testing.T, controller *Controller, jobID types.JobID, checkFunc func() bool, timeout time.Duration) bool {
 	t.Helper()
 
@@ -70,32 +70,32 @@ func waitForJobStatus(t *testing.T, controller *Controller, jobID types.JobID, c
 }
 
 // ============================================================================
-// 基礎功能測試
+// Basic Functionality Tests
 // ============================================================================
 
-// TestNewController 測試 Controller 初始化
+// TestNewController tests Controller initialization
 func TestNewController(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	if controller == nil {
-		t.Fatal("Controller 不應為 nil")
+		t.Fatal("Controller should not be nil")
 	}
 
 	if controller.jobManager == nil {
-		t.Error("JobManager 未初始化")
+		t.Error("JobManager not initialized")
 	}
 
 	if controller.wal == nil {
-		t.Error("WAL 未初始化")
+		t.Error("WAL not initialized")
 	}
 
 	if controller.snapshot == nil {
-		t.Error("Snapshot Manager 未初始化")
+		t.Error("Snapshot Manager not initialized")
 	}
 
 	if controller.pool == nil {
-		t.Error("Worker Pool 未初始化")
+		t.Error("Worker Pool not initialized")
 	}
 
 	if controller.config.WorkerCount != 2 {
@@ -103,7 +103,7 @@ func TestNewController(t *testing.T) {
 	}
 }
 
-// TestNewControllerWithInvalidPath 測試使用無效路徑初始化
+// TestNewControllerWithInvalidPath tests initialization with invalid path
 func TestNewControllerWithInvalidPath(t *testing.T) {
 	config := Config{
 		WorkerCount:      2,
@@ -117,45 +117,45 @@ func TestNewControllerWithInvalidPath(t *testing.T) {
 
 	_, err := NewController(config)
 	if err == nil {
-		t.Error("使用無效路徑應該回傳錯誤")
+		t.Error("Should return error with invalid path")
 	}
 }
 
-// TestStart 測試 Controller 啟動
+// TestStart tests Controller startup
 func TestStart(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 檢查啟動時間是否設定
+	// Check if start time is set
 	if controller.startTime.IsZero() {
-		t.Error("啟動時間未設定")
+		t.Error("Start time not set")
 	}
 
-	// 等待一小段時間確保循環啟動
+	// Wait a moment to ensure loops are started
 	time.Sleep(200 * time.Millisecond)
 
-	// 檢查 stopCh 是否可用
+	// Check if stopCh is available
 	select {
 	case <-controller.stopCh:
-		t.Error("stopCh 不應該被關閉")
+		t.Error("stopCh should not be closed")
 	default:
-		// 正確
+		// Correct
 	}
 }
 
-// TestEnqueueJobs 測試任務入隊
+// TestEnqueueJobs tests job enqueueing
 func TestEnqueueJobs(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
 	jobs := []types.Job{
@@ -166,37 +166,37 @@ func TestEnqueueJobs(t *testing.T) {
 
 	err = controller.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 驗證任務已加入
+	// Verify jobs have been added
 	controller.mu.Lock()
 	stats := controller.jobManager.Stats()
 	controller.mu.Unlock()
 
 	if stats["pending"] != 3 {
-		t.Errorf("pending 任務數 = %d, want 3", stats["pending"])
+		t.Errorf("pending job count = %d, want 3", stats["pending"])
 	}
 }
 
-// TestGetStatus 測試狀態查詢
+// TestGetStatus tests status query
 func TestGetStatus(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 先等待一小段時間
+	// Wait a moment first
 	time.Sleep(100 * time.Millisecond)
 
 	status := controller.GetStatus()
 
-	// 檢查必要欄位
+	// Check required fields
 	if _, ok := status["uptime"]; !ok {
-		t.Error("status 缺少 uptime 欄位")
+		t.Error("status missing uptime field")
 	}
 
 	if workers, ok := status["workers"]; !ok || workers != 2 {
@@ -204,78 +204,78 @@ func TestGetStatus(t *testing.T) {
 	}
 
 	if _, ok := status["pending"]; !ok {
-		t.Error("status 缺少 pending 欄位")
+		t.Error("status missing pending field")
 	}
 
 	if _, ok := status["in_flight"]; !ok {
-		t.Error("status 缺少 in_flight 欄位")
+		t.Error("status missing in_flight field")
 	}
 
 	if _, ok := status["completed"]; !ok {
-		t.Error("status 缺少 completed 欄位")
+		t.Error("status missing completed field")
 	}
 
 	if _, ok := status["dead"]; !ok {
-		t.Error("status 缺少 dead 欄位")
+		t.Error("status missing dead field")
 	}
 }
 
-// TestStop 測試優雅關閉
+// TestStop tests graceful shutdown
 func TestStop(t *testing.T) {
 	controller, tmpDir := createTestController(t)
-	defer cleanup(t, nil, tmpDir) // 不要在 cleanup 中再次 Stop
+	defer cleanup(t, nil, tmpDir) // Don't call Stop again in cleanup
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 加入一些任務
+	// Add some jobs
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test"}},
 	}
 	controller.EnqueueJobs(jobs)
 
-	// 等待任務開始處理
+	// Wait for job to start processing
 	time.Sleep(200 * time.Millisecond)
 
-	// 執行 Stop
+	// Execute Stop
 	controller.Stop()
 
-	// 檢查 stopCh 是否關閉
+	// Check if stopCh is closed
 	select {
 	case <-controller.stopCh:
-		// 正確
+		// Correct
 	default:
-		t.Error("stopCh 應該被關閉")
+		t.Error("stopCh should be closed")
 	}
 }
 
 // ============================================================================
-// 基本工作流程測試
+// Basic Workflow Tests
 // ============================================================================
 
-// TestBasicWorkflow 測試基本工作流程：入隊 -> 調度 -> 完成
+// TestBasicWorkflow tests basic workflow: enqueue -> dispatch -> complete
 func TestBasicWorkflow(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 加入任務
+	// Add job
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test"}},
 	}
 
 	err = controller.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 等待任務完成或進入死信（最多 10 秒）
+	// Wait for job to complete or become dead (max 10 seconds)
 	success := waitForJobStatus(t, controller, "task-001", func() bool {
 		controller.mu.Lock()
 		defer controller.mu.Unlock()
@@ -284,33 +284,33 @@ func TestBasicWorkflow(t *testing.T) {
 	}, 10*time.Second)
 
 	if !success {
-		t.Error("任務未在 10 秒內完成或進入死信")
+		t.Error("Job did not complete or become dead within 10 seconds")
 	}
 
-	// 檢查最終狀態
+	// Check final status
 	controller.mu.Lock()
 	completed := controller.jobManager.IsCompleted("task-001")
 	dead := controller.jobManager.IsDead("task-001")
 	controller.mu.Unlock()
 
 	if !completed && !dead {
-		t.Error("任務應該處於完成或死信狀態")
+		t.Error("Job should be in completed or dead status")
 	}
 
-	t.Logf("任務 task-001 最終狀態: completed=%v, dead=%v", completed, dead)
+	t.Logf("Job task-001 final status: completed=%v, dead=%v", completed, dead)
 }
 
-// TestMultipleJobsWorkflow 測試多任務並發處理
+// TestMultipleJobsWorkflow tests concurrent processing of multiple jobs
 func TestMultipleJobsWorkflow(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 加入多個任務
+	// Add multiple jobs
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test1"}},
 		{ID: "task-002", Payload: map[string]interface{}{"data": "test2"}},
@@ -321,10 +321,10 @@ func TestMultipleJobsWorkflow(t *testing.T) {
 
 	err = controller.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 等待所有任務完成（最多 15 秒）
+	// Wait for all jobs to complete (max 15 seconds)
 	deadline := time.Now().Add(15 * time.Second)
 	allDone := false
 
@@ -343,38 +343,38 @@ func TestMultipleJobsWorkflow(t *testing.T) {
 	}
 
 	if !allDone {
-		t.Error("並非所有任務都在 15 秒內完成")
+		t.Error("Not all jobs completed within 15 seconds")
 	}
 
-	// 檢查最終統計
+	// Check final statistics
 	controller.mu.Lock()
 	stats := controller.jobManager.Stats()
 	controller.mu.Unlock()
 
 	totalDone := stats["completed"] + stats["dead"]
 	if totalDone != 5 {
-		t.Errorf("完成任務總數 = %d, want 5", totalDone)
+		t.Errorf("Total completed jobs = %d, want 5", totalDone)
 	}
 
-	t.Logf("任務統計: completed=%d, dead=%d, in_flight=%d, pending=%d",
+	t.Logf("Job statistics: completed=%d, dead=%d, in_flight=%d, pending=%d",
 		stats["completed"], stats["dead"], stats["in_flight"], stats["pending"])
 }
 
 // ============================================================================
-// 快照與恢復測試
+// Snapshot and Recovery Tests
 // ============================================================================
 
-// TestSnapshotCreation 測試快照生成
+// TestSnapshotCreation tests snapshot generation
 func TestSnapshotCreation(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 加入任務
+	// Add jobs
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test1"}},
 		{ID: "task-002", Payload: map[string]interface{}{"data": "test2"}},
@@ -382,35 +382,35 @@ func TestSnapshotCreation(t *testing.T) {
 
 	err = controller.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 等待任務被調度
+	// Wait for jobs to be dispatched
 	time.Sleep(500 * time.Millisecond)
 
-	// 手動觸發快照
+	// Manually trigger snapshot
 	err = controller.takeSnapshot()
 	if err != nil {
-		t.Fatalf("建立快照失敗: %v", err)
+		t.Fatalf("Failed to create snapshot: %v", err)
 	}
 
-	// 檢查快照檔案是否存在
+	// Check if snapshot file exists
 	if _, err := os.Stat(controller.config.SnapshotPath); os.IsNotExist(err) {
-		t.Error("快照檔案不存在")
+		t.Error("Snapshot file does not exist")
 	}
 }
 
-// TestLoadSnapshot 測試快照載入
+// TestLoadSnapshot tests snapshot loading
 func TestLoadSnapshot(t *testing.T) {
-	// 第一階段：建立 Controller 並產生快照
+	// Phase 1: Create Controller and generate snapshot
 	controller1, tmpDir := createTestController(t)
 
 	err := controller1.Start()
 	if err != nil {
-		t.Fatalf("啟動 controller1 失敗: %v", err)
+		t.Fatalf("Failed to start controller1: %v", err)
 	}
 
-	// 加入任務
+	// Add jobs
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test1"}},
 		{ID: "task-002", Payload: map[string]interface{}{"data": "test2"}},
@@ -419,27 +419,27 @@ func TestLoadSnapshot(t *testing.T) {
 
 	err = controller1.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 等待任務被處理
+	// Wait for jobs to be processed
 	time.Sleep(500 * time.Millisecond)
 
-	// 建立快照
+	// Create snapshot
 	err = controller1.takeSnapshot()
 	if err != nil {
-		t.Fatalf("建立快照失敗: %v", err)
+		t.Fatalf("Failed to create snapshot: %v", err)
 	}
 
-	// 取得快照前的統計
+	// Get statistics before snapshot
 	controller1.mu.Lock()
 	stats1 := controller1.jobManager.Stats()
 	controller1.mu.Unlock()
 
-	// 關閉第一個 Controller
+	// Close first Controller
 	controller1.Stop()
 
-	// 第二階段：建立新的 Controller 並載入快照
+	// Phase 2: Create new Controller and load snapshot
 	config := Config{
 		WorkerCount:      2,
 		TaskTimeout:      2 * time.Second,
@@ -452,43 +452,43 @@ func TestLoadSnapshot(t *testing.T) {
 
 	controller2, err := NewController(config)
 	if err != nil {
-		t.Fatalf("建立 controller2 失敗: %v", err)
+		t.Fatalf("Failed to create controller2: %v", err)
 	}
 	defer cleanup(t, controller2, tmpDir)
 
-	// 啟動會自動載入快照
+	// Start will automatically load snapshot
 	err = controller2.Start()
 	if err != nil {
-		t.Fatalf("啟動 controller2 失敗: %v", err)
+		t.Fatalf("Failed to start controller2: %v", err)
 	}
 
-	// 取得恢復後的統計
+	// Get statistics after recovery
 	controller2.mu.Lock()
 	stats2 := controller2.jobManager.Stats()
 	totalJobs2 := stats2["pending"] + stats2["in_flight"] + stats2["completed"] + stats2["dead"]
 	controller2.mu.Unlock()
 
-	// 驗證任務數量
+	// Verify job count
 	totalJobs1 := stats1["pending"] + stats1["in_flight"] + stats1["completed"] + stats1["dead"]
 	if totalJobs2 != totalJobs1 {
-		t.Errorf("恢復後任務總數 = %d, want %d", totalJobs2, totalJobs1)
+		t.Errorf("Total jobs after recovery = %d, want %d", totalJobs2, totalJobs1)
 	}
 
-	t.Logf("快照前統計: %+v", stats1)
-	t.Logf("恢復後統計: %+v", stats2)
+	t.Logf("Statistics before snapshot: %+v", stats1)
+	t.Logf("Statistics after recovery: %+v", stats2)
 }
 
-// TestCrashRecovery 測試崩潰恢復（快照 + WAL 重放）
+// TestCrashRecovery tests crash recovery (snapshot + WAL replay)
 func TestCrashRecovery(t *testing.T) {
-	// 第一階段：正常運行
+	// Phase 1: Normal operation
 	controller1, tmpDir := createTestController(t)
 
 	err := controller1.Start()
 	if err != nil {
-		t.Fatalf("啟動 controller1 失敗: %v", err)
+		t.Fatalf("Failed to start controller1: %v", err)
 	}
 
-	// 加入一批任務
+	// Add a batch of jobs
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test1"}},
 		{ID: "task-002", Payload: map[string]interface{}{"data": "test2"}},
@@ -499,27 +499,27 @@ func TestCrashRecovery(t *testing.T) {
 
 	err = controller1.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 等待部分任務完成
+	// Wait for some jobs to complete
 	time.Sleep(1 * time.Second)
 
-	// 手動建立快照
+	// Manually create snapshot
 	err = controller1.takeSnapshot()
 	if err != nil {
-		t.Fatalf("建立快照失敗: %v", err)
+		t.Fatalf("Failed to create snapshot: %v", err)
 	}
 
-	// 取得快照時的統計
+	// Get statistics at snapshot time
 	controller1.mu.Lock()
 	stats1 := controller1.jobManager.Stats()
 	controller1.mu.Unlock()
 
-	// 模擬崩潰：直接關閉 WAL 和檔案（不執行 Stop）
+	// Simulate crash: directly close WAL and files (no Stop execution)
 	controller1.wal.Close()
 
-	// 第二階段：恢復
+	// Phase 2: Recovery
 	config := Config{
 		WorkerCount:      2,
 		TaskTimeout:      2 * time.Second,
@@ -533,52 +533,52 @@ func TestCrashRecovery(t *testing.T) {
 	startRecovery := time.Now()
 	controller2, err := NewController(config)
 	if err != nil {
-		t.Fatalf("建立 controller2 失敗: %v", err)
+		t.Fatalf("Failed to create controller2: %v", err)
 	}
 	defer cleanup(t, controller2, tmpDir)
 
-	// 啟動（會執行 loadSnapshot + replayWAL）
+	// Start (will execute loadSnapshot + replayWAL)
 	err = controller2.Start()
 	if err != nil {
-		t.Fatalf("啟動 controller2 失敗: %v", err)
+		t.Fatalf("Failed to start controller2: %v", err)
 	}
 
 	recoveryTime := time.Since(startRecovery)
 
-	// 驗證恢復時間 < 3s
+	// Verify recovery time < 3s
 	if recoveryTime > 3*time.Second {
-		t.Errorf("恢復時間 = %v, want < 3s", recoveryTime)
+		t.Errorf("Recovery time = %v, want < 3s", recoveryTime)
 	}
 
-	// 取得恢復後的統計
+	// Get statistics after recovery
 	controller2.mu.Lock()
 	stats2 := controller2.jobManager.Stats()
 	controller2.mu.Unlock()
 
-	// 驗證任務數量一致
+	// Verify job countconsistency
 	totalJobs1 := stats1["pending"] + stats1["in_flight"] + stats1["completed"] + stats1["dead"]
 	totalJobs2 := stats2["pending"] + stats2["in_flight"] + stats2["completed"] + stats2["dead"]
 
 	if totalJobs2 != totalJobs1 {
-		t.Errorf("恢復後任務總數 = %d, want %d", totalJobs2, totalJobs1)
+		t.Errorf("Total jobs after recovery = %d, want %d", totalJobs2, totalJobs1)
 	}
 
-	t.Logf("恢復時間: %v", recoveryTime)
-	t.Logf("崩潰前統計: %+v", stats1)
-	t.Logf("恢復後統計: %+v", stats2)
+	t.Logf("Recovery time: %v", recoveryTime)
+	t.Logf("Statistics before crash: %+v", stats1)
+	t.Logf("Statistics after recovery: %+v", stats2)
 }
 
-// TestRecoveryTime 測試恢復時間性能（目標 < 3s）
+// TestRecoveryTime tests recovery time performance (target < 3s)
 func TestRecoveryTime(t *testing.T) {
-	// 建立一個有較多任務的場景
+	// Create a scenario with more jobs
 	controller1, tmpDir := createTestController(t)
 
 	err := controller1.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 加入 50 個任務
+	// Add 50 jobs
 	jobs := make([]types.Job, 50)
 	for i := 0; i < 50; i++ {
 		jobs[i] = types.Job{
@@ -589,21 +589,21 @@ func TestRecoveryTime(t *testing.T) {
 
 	err = controller1.EnqueueJobs(jobs)
 	if err != nil {
-		t.Fatalf("入隊失敗: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	// 等待任務被處理
+	// Wait for jobs to be processed
 	time.Sleep(2 * time.Second)
 
-	// 建立快照
+	// Create snapshot
 	err = controller1.takeSnapshot()
 	if err != nil {
-		t.Fatalf("建立快照失敗: %v", err)
+		t.Fatalf("Failed to create snapshot: %v", err)
 	}
 
 	controller1.Stop()
 
-	// 測試恢復時間
+	// Test recovery time
 	config := Config{
 		WorkerCount:      2,
 		TaskTimeout:      2 * time.Second,
@@ -618,128 +618,128 @@ func TestRecoveryTime(t *testing.T) {
 
 	controller2, err := NewController(config)
 	if err != nil {
-		t.Fatalf("建立 controller2 失敗: %v", err)
+		t.Fatalf("Failed to create controller2: %v", err)
 	}
 	defer cleanup(t, controller2, tmpDir)
 
 	err = controller2.Start()
 	if err != nil {
-		t.Fatalf("啟動 controller2 失敗: %v", err)
+		t.Fatalf("Failed to start controller2: %v", err)
 	}
 
 	recoveryTime := time.Since(startTime)
 
 	if recoveryTime > 3*time.Second {
-		t.Errorf("恢復時間 = %v, 超過 3s 目標", recoveryTime)
+		t.Errorf("Recovery time = %v, exceeds 3s target", recoveryTime)
 	}
 
-	t.Logf("恢復 50 個任務耗時: %v", recoveryTime)
+	t.Logf("Time to recover 50 jobs: %v", recoveryTime)
 }
 
 // ============================================================================
-// WAL 重放與冪等性測試
+// WAL Replay and Idempotency Tests
 // ============================================================================
 
-// TestReplayWAL 測試 WAL 重放
+// TestReplayWAL tests WAL replay
 func TestReplayWAL(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
-	// 不啟動 Controller，直接測試 replayWAL
-	// 先加入一些 WAL 事件（通過直接操作）
+	// Do not start Controller, test replayWAL directly
+	// Add some WAL events first (through direct operations)
 
-	// 手動建立一些任務並寫入 WAL
+	// Manually create some jobs and write to WAL
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test1"}},
 		{ID: "task-002", Payload: map[string]interface{}{"data": "test2"}},
 	}
 
 	for _, job := range jobs {
-		controller.wal.Append(wal.EventEnqueue, job, false)
+		controller.wal.Append(wal.EventEnqueue, &job)
 	}
 
-	// 執行重放
+	// Execute replay
 	err := controller.replayWAL()
 	if err != nil {
-		t.Fatalf("重放 WAL 失敗: %v", err)
+		t.Fatalf("WAL replay failed: %v", err)
 	}
 
-	// 驗證 JobManager 狀態
+	// Verify JobManager status
 	controller.mu.Lock()
 	stats := controller.jobManager.Stats()
 	controller.mu.Unlock()
 
-	// 因為只有 Enqueue 事件，應該都在快照中
-	t.Logf("重放後統計: %+v", stats)
+	// Since there are only Enqueue events, they should all be in the snapshot
+	t.Logf("Statistics after replay: %+v", stats)
 }
 
-// TestIdempotency 測試冪等性（重複重放不會出錯）
+// TestIdempotency tests idempotency (repeated replay without errors)
 func TestIdempotency(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
-	// 加入任務
+	// Add jobs
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test1"}},
 	}
 
 	for _, job := range jobs {
 		controller.jobManager.Enqueue(job)
-		controller.wal.Append(wal.EventEnqueue, job, false)
+		controller.wal.Append(wal.EventEnqueue, &job)
 	}
 
-	// 標記為完成
+	// Mark as completed
 	controller.jobManager.PopPending()
 	deadline := time.Now().Add(2 * time.Second)
 	controller.jobManager.MarkInFlight("task-001", deadline)
-	controller.wal.Append(wal.EventDispatch, jobs[0], false)
+	controller.wal.Append(wal.EventDispatch, &jobs[0])
 	controller.jobManager.MarkCompleted("task-001")
-	controller.wal.Append(wal.EventAck, jobs[0], false)
+	controller.wal.Append(wal.EventAck, &jobs[0])
 
-	// 第一次重放
+	// First replay
 	err := controller.replayWAL()
 	if err != nil {
-		t.Fatalf("第一次重放失敗: %v", err)
+		t.Fatalf("First replay failed: %v", err)
 	}
 
 	controller.mu.Lock()
 	stats1 := controller.jobManager.Stats()
 	controller.mu.Unlock()
 
-	// 第二次重放（應該冪等）
+	// Second replay (should be idempotent)
 	err = controller.replayWAL()
 	if err != nil {
-		t.Fatalf("第二次重放失敗: %v", err)
+		t.Fatalf("Second replay failed: %v", err)
 	}
 
 	controller.mu.Lock()
 	stats2 := controller.jobManager.Stats()
 	controller.mu.Unlock()
 
-	// 統計應該相同
+	// Statistics should be the same
 	if stats1["completed"] != stats2["completed"] {
-		t.Errorf("冪等性測試失敗: 第一次 completed=%d, 第二次 completed=%d",
+		t.Errorf("Idempotency test failed: first completed=%d, second completed=%d",
 			stats1["completed"], stats2["completed"])
 	}
 
-	t.Logf("冪等性測試通過: stats1=%+v, stats2=%+v", stats1, stats2)
+	t.Logf("Idempotency test passed: stats1=%+v, stats2=%+v", stats1, stats2)
 }
 
 // ============================================================================
-// 並發與壓力測試
+// Concurrency and Stress Tests
 // ============================================================================
 
-// TestConcurrentEnqueue 測試並發入隊
+// TestConcurrentEnqueue tests concurrent enqueue
 func TestConcurrentEnqueue(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, controller, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// 啟動多個 goroutine 並發入隊
+	// Start multiple goroutines for concurrent enqueueing
 	const goroutines = 5
 	const jobsPerGoroutine = 10
 
@@ -756,22 +756,22 @@ func TestConcurrentEnqueue(t *testing.T) {
 			}
 
 			if err := controller.EnqueueJobs(jobs); err != nil {
-				t.Errorf("goroutine %d 入隊失敗: %v", id, err)
+				t.Errorf("goroutine %d Enqueue failed: %v", id, err)
 			}
 
 			done <- true
 		}(i)
 	}
 
-	// 等待所有 goroutine 完成
+	// Wait for all goroutines to complete
 	for i := 0; i < goroutines; i++ {
 		<-done
 	}
 
-	// 等待任務被處理
+	// Wait for jobs to be processed
 	time.Sleep(2 * time.Second)
 
-	// 檢查任務總數
+	// Check total job count
 	controller.mu.Lock()
 	stats := controller.jobManager.Stats()
 	controller.mu.Unlock()
@@ -780,40 +780,40 @@ func TestConcurrentEnqueue(t *testing.T) {
 	actualTotal := stats["pending"] + stats["in_flight"] + stats["completed"] + stats["dead"]
 
 	if actualTotal != expectedTotal {
-		t.Errorf("任務總數 = %d, want %d", actualTotal, expectedTotal)
+		t.Errorf("Total jobs = %d, want %d", actualTotal, expectedTotal)
 	}
 
-	t.Logf("並發入隊測試: %d 個 goroutines, 每個 %d 個任務, 總計 %d 個",
+	t.Logf("Concurrent enqueue test: %d  goroutines, each %d  jobs, total %d ",
 		goroutines, jobsPerGoroutine, expectedTotal)
-	t.Logf("最終統計: %+v", stats)
+	t.Logf("Final statistics: %+v", stats)
 }
 
 // ============================================================================
-// 錯誤處理測試
+// Error Handling Tests
 // ============================================================================
 
-// TestEnqueueAfterStop 測試停止後入隊
+// TestEnqueueAfterStop tests enqueueing after stop
 func TestEnqueueAfterStop(t *testing.T) {
 	controller, tmpDir := createTestController(t)
 	defer cleanup(t, nil, tmpDir)
 
 	err := controller.Start()
 	if err != nil {
-		t.Fatalf("啟動失敗: %v", err)
+		t.Fatalf("Start failed: %v", err)
 	}
 
 	controller.Stop()
 
-	// 停止後嘗試入隊
+	// Try to enqueue after stop
 	jobs := []types.Job{
 		{ID: "task-001", Payload: map[string]interface{}{"data": "test"}},
 	}
 
 	err = controller.EnqueueJobs(jobs)
-	// WAL 已關閉，應該會出錯
+	// WAL is closed, should return error
 	if err == nil {
-		t.Log("注意：停止後入隊未返回錯誤（可能需要在 WAL 中增強錯誤檢查）")
+		t.Log("Note: No error returned when enqueueing after stop (may need enhanced error checking in WAL)")
 	} else {
-		t.Logf("停止後入隊正確返回錯誤: %v", err)
+		t.Logf("Enqueue after stop correctly returned error: %v", err)
 	}
 }
