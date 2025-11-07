@@ -1,112 +1,112 @@
 // ============================================================================
-// Beaver-Raft WAL (Write-Ahead Log) - 預寫日誌實現
+// Beaver-Raft WAL (Write-Ahead Log) - Write-Ahead Log Implementation
 // ============================================================================
 //
 // Package: internal/storage/wal
-// 文件: wal.go
-// 功能: 實現 WAL 機制，確保數據持久化和崩潰恢復
+// File: wal.go
+// Purpose: Implement WAL mechanism to ensure data persistence and crash recovery
 //
-// WAL 概念:
-//   Write-Ahead Log 是數據庫系統中的核心技術：
-//   1. 任何狀態修改前，先將操作寫入 WAL
-//   2. WAL 寫入成功後，才修改內存狀態
-//   3. 崩潰後通過重放 WAL 恢復狀態
-//   4. 確保數據不會因崩潰而丟失
+// WAL Concept:
+//   Write-Ahead Log is a core technology in database systems:
+//   1. Before any state modification, write operation to WAL
+//   2. Only modify in-memory state after WAL write succeeds
+//   3. Recover state by replaying WAL after crash
+//   4. Ensure data won't be lost due to crashes
 //
-// 工作原理:
-//   操作流程：
+// How It Works:
+//   Operation Flow:
 //   ┌─────────────┐
-//   │ 1. Append   │ → 寫入 WAL 日誌
+//   │ 1. Append   │ → Write to WAL log
 //   │    WAL      │
 //   └─────────────┘
 //          ↓
 //   ┌─────────────┐
-//   │ 2. Sync     │ → 強制刷盤（fsync）
+//   │ 2. Sync     │ → Force flush to disk (fsync)
 //   │    Disk     │
 //   └─────────────┘
 //          ↓
 //   ┌─────────────┐
-//   │ 3. Update   │ → 更新內存狀態
+//   │ 3. Update   │ → Update in-memory state
 //   │    Memory   │
 //   └─────────────┘
 //
-//   恢復流程：
+//   Recovery Flow:
 //   ┌─────────────┐
-//   │ 1. Load     │ → 加載最新快照
+//   │ 1. Load     │ → Load latest snapshot
 //   │    Snapshot │
 //   └─────────────┘
 //          ↓
 //   ┌─────────────┐
-//   │ 2. Replay   │ → 重放快照後的 WAL
+//   │ 2. Replay   │ → Replay WAL after snapshot
 //   │    WAL      │
 //   └─────────────┘
 //          ↓
 //   ┌─────────────┐
-//   │ 3. Resume   │ → 繼續正常運行
+//   │ 3. Resume   │ → Continue normal operation
 //   │    Normal   │
 //   └─────────────┘
 //
-// 數據格式:
-//   每條 WAL 記錄包含：
+// Data Format:
+//   Each WAL record contains:
 //   {
-//     "seq": 12345,              // 序列號，單調遞增
-//     "type": "JobEnqueued",     // 事件類型
-//     "timestamp": 1698765432,   // Unix 毫秒時間戳
-//     "job_id": "job-123",       // 任務 ID
-//     "payload": {...}           // 事件相關數據
+//     "seq": 12345,              // Sequence number, monotonically increasing
+//     "type": "JobEnqueued",     // Event type
+//     "timestamp": 1698765432,   // Unix millisecond timestamp
+//     "job_id": "job-123",       // Job ID
+//     "payload": {...}           // Event-related data
 //   }
 //
-// 事件類型:
-//   - JobEnqueued: 任務入隊
-//   - JobDispatched: 任務分派給 Worker
-//   - JobCompleted: 任務成功完成
-//   - JobFailed: 任務執行失敗
-//   - JobDead: 任務標記為死信
+// Event Types:
+//   - JobEnqueued: Job enqueued
+//   - JobDispatched: Job dispatched to Worker
+//   - JobCompleted: Job completed successfully
+//   - JobFailed: Job execution failed
+//   - JobDead: Job marked as dead letter
 //
-// 批次寫入優化:
-//   為提升性能，採用批次寫入策略：
-//   - 事件先累積在內存緩衝區
-//   - 達到批次大小或超時時統一刷盤
-//   - 減少 fsync 調用次數（fsync 是昂貴操作）
-//   - 權衡：延遲 vs 吞吐量
+// Batch Write Optimization:
+//   To improve performance, use batch write strategy:
+//   - Events first accumulate in memory buffer
+//   - Flush to disk when batch size reached or timeout
+//   - Reduce fsync call count (fsync is expensive)
+//   - Trade-off: Latency vs Throughput
 //
-// 日誌輪轉 (Rotation):
-//   定期創建快照後，舊的 WAL 可以清空：
-//   1. 創建系統快照
-//   2. 壓縮舊 WAL（可選）
-//   3. 創建新 WAL 文件
-//   4. 刪除或歸檔舊文件
+// Log Rotation:
+//   After periodic snapshot creation, old WAL can be cleared:
+//   1. Create system snapshot
+//   2. Compress old WAL (optional)
+//   3. Create new WAL file
+//   4. Delete or archive old files
 //
-// 數據完整性:
-//   - Checksum: 每條記錄包含校驗和
-//   - Atomic Write: 使用 append-only 模式
-//   - Fsync: 確保數據真正寫入磁盤
-//   - 重放時跳過損壞的記錄
+// Data Integrity:
+//   - Checksum: Each record includes checksum
+//   - Atomic Write: Use append-only mode
+//   - Fsync: Ensure data actually written to disk
+//   - Skip corrupted records during replay
 //
-// 性能考慮:
-//   - 批次寫入減少 I/O 次數
-//   - JSON 格式便於調試但有性能開銷
-//   - 可考慮使用二進制格式（Protocol Buffers）
-//   - sync.Mutex 確保並發安全
+// Performance Considerations:
+//   - Batch writing reduces I/O count
+//   - JSON format convenient for debugging but has performance overhead
+//   - Consider using binary format (Protocol Buffers)
+//   - sync.Mutex ensures concurrency safety
 //
-// 錯誤處理:
-//   - 寫入失敗: 返回錯誤，調用方決定是否重試
-//   - 重放失敗: 跳過損壞記錄，記錄警告
-//   - 磁盤滿: 需要外部監控和告警
+// Error Handling:
+//   - Write failure: Return error, caller decides whether to retry
+//   - Replay failure: Skip corrupted records, log warnings
+//   - Disk full: Requires external monitoring and alerts
 //
-// 與 Snapshot 協作:
-//   WAL 和 Snapshot 互補：
-//   - Snapshot 提供基礎狀態
-//   - WAL 記錄快照後的增量變化
-//   - 兩者結合實現快速恢復
+// Collaboration with Snapshot:
+//   WAL and Snapshot are complementary:
+//   - Snapshot provides base state
+//   - WAL records incremental changes after snapshot
+//   - Together enable fast recovery
 //
 // ============================================================================
-// WAL 核心實作
-// 職責：
-// 1. 追加事件到日誌檔案（append-only）
-// 2. 提供重放功能以恢復系統狀態
-// 3. 支援日誌旋轉（快照後清空）
-// 4. 確保寫入持久性與資料完整性
+// WAL Core Implementation
+// Responsibilities:
+// 1. Append events to log file (append-only)
+// 2. Provide replay function to recover system state
+// 3. Support log rotation (clear after snapshot)
+// 4. Ensure write durability and data integrity
 // ============================================================================
 
 package wal
@@ -123,24 +123,24 @@ import (
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
-// FileInterface 定義檔案操作所需的方法
-// 這允許在測試中對檔案操作進行模擬
+// FileInterface defines the methods required for file operations
+// This allows mocking file operations in tests
 type FileInterface interface {
 	Write(p []byte) (n int, err error)
 	Sync() error
 	Close() error
 }
 
-// WAL 表示 Write-Ahead Log 實例
+// WAL represents a Write-Ahead Log instance
 type WAL struct {
-	mu           sync.Mutex    // 保護並發寫入
-	file         FileInterface // WAL 檔案
-	encoder      *json.Encoder // JSON 編碼器
-	path         string        // WAL 檔案路徑
-	seq          uint64        // 當前事件序號
-	syncOnAppend bool          // 是否每次追加都強制同步
+	mu           sync.Mutex    // Protects concurrent writes
+	file         FileInterface // WAL file
+	encoder      *json.Encoder // JSON encoder
+	path         string        // WAL file path
+	seq          uint64        // Current event sequence number
+	syncOnAppend bool          // Whether to force sync on every append
 
-	buffer        []Event // 批次寫入事件緩衝区，原因：直接用結構化事件，方便序列化與管理，避免 bytes.Buffer 需額外 encode/decode
+	buffer        []Event // Batch write event buffer, reason: directly use structured events for easy serialization and management, avoiding bytes.Buffer requiring extra encode/decode
 	bufferSize    int
 	lastFlushTime time.Time
 	flushInterval time.Duration
@@ -153,157 +153,148 @@ type SnapshotData struct {
 }
 
 // ============================================================================
-// 公開介面
+// Public Interface
 // ============================================================================
 
-/*
-NewWAL 建立或開啟一個 WAL 實例
-
-行為：
-- 如果檔案不存在，建立新檔案，seq 從 0 開始
-- 如果檔案已存在，讀取最後一個事件的 seq 並繼續
-- 以追加模式（O_APPEND）開啟，確保寫入不覆蓋
-
-參數：
-
-	path - WAL 檔案路徑
-
-回傳：
-
-	*WAL 實例，錯誤（如果有）
-*/
-func NewWAL(path string, syncOnAppend bool) (*WAL, error) {
-	// 以 O_CREATE | O_APPEND | O_RDWR 模式打開 WAL 檔案
+// NewWAL creates a new WAL instance
+func NewWAL(path string, syncOnAppend bool, bufferSize int, flushInterval time.Duration) (*WAL, error) {
+	// Open WAL file with O_CREATE | O_APPEND | O_RDWR mode
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
-		// 開檔失敗直接回傳錯誤
-		return nil, err
+		// Return error directly if file open fails
+		return nil, fmt.Errorf("failed to open WAL file: %w", err)
 	}
 
-	// 以 JSON Encoder 包裝檔案，方便後續寫入事件
+	// Wrap file with JSON Encoder for convenient event writing
 	encoder := json.NewEncoder(file)
 
-	// 初始化事件序號，預設為 0
+	// Initialize event sequence number, default is 0
 	var seq uint64 = 0
 
-	// 若檔案非空，嘗試讀取最後一個事件以取得 seq
-	stat, statErr := file.Stat()
-	if statErr == nil && stat.Size() > 0 {
-		lastEvent, err := GetLastEvent(path)
-		if err == nil && lastEvent != nil {
-			seq = lastEvent.Seq
-		}
-		// 若讀取失敗或檔案損毀，可選擇 seq 保持為 0，視需求決定
+	// If file is not empty, try to read last event to get seq
+	if lastEvent, err := GetLastEvent(path); err == nil && lastEvent != nil {
+		seq = lastEvent.Seq
+	} else if err != ErrEmptyWAL && err != nil {
+		// If file is corrupted or other error occurs
+		fmt.Printf("Warning: failed to get last event, starting from seq=0: %v\n", err)
+		// If read fails or file is corrupted, seq can remain 0, decide based on requirements
 	}
 
-	// 建立 WAL 實例，注入狀態
+	// Create WAL instance, inject state
 	wal := &WAL{
-		mu:           sync.Mutex{},
 		file:         file,
 		encoder:      encoder,
 		path:         path,
 		seq:          seq,
 		syncOnAppend: syncOnAppend,
 
-		buffer:        make([]Event, 0, 1000), // 預設容量 1000
-		bufferSize:    1000,
+		buffer:        make([]Event, 0, 1000), // Default capacity 1000
+		bufferSize:    bufferSize,
 		lastFlushTime: time.Now(),
-		flushInterval: 1 * time.Second,
+		flushInterval: flushInterval,
 	}
 
-	// 回傳 WAL 實例
+	// Return WAL instance
 	return wal, nil
 }
 
-// Append 追加一個事件到 WAL
+// Append appends an event to WAL
 //
-// 行為：
-// - 自動遞增 seq
-// - 計算 checksum
-// - 寫入檔案並同步到磁碟（可選：批次同步）
+// Behavior:
+// - Automatically increment seq
+// - Calculate checksum
+// - Write to file and sync to disk (optional: batch sync)
 //
-// 參數：
+// Parameters:
 //
-//	eventType - 事件類型（ENQUEUE, DISPATCH, ACK 等）
-//	job       - 任務實例
+//	eventType - Event type (ENQUEUE, DISPATCH, ACK, etc.)
+//	job       - Job instance
 //
-// 回傳：
+// Returns:
 //
-//	錯誤（如果寫入失敗）
-func (w *WAL) Append(eventType EventType, job types.Job, isForceFlush bool) error {
+//	error (if write fails)
+func (w *WAL) Append(eventType EventType, job *types.Job) error {
 	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	w.seq++
 	timestamp := time.Now().UnixMilli()
+	checksum := CalculateChecksum(eventType, *job, w.seq)
+
 	event := Event{
 		Seq:       w.seq,
 		Type:      eventType,
 		JobID:     job.ID,
 		Timestamp: timestamp,
+		Checksum:  checksum,
 	}
-	event.Checksum = CalculateChecksum(eventType, job, w.seq)
 
-	// 批次寫入：先加入 buffer，滿了或超時才 flush
+	// Batch write: add to buffer first, flush when full or timeout
 	w.buffer = append(w.buffer, event)
 
-	// 檢查是否需要 flush
-	needFlush := isForceFlush || len(w.buffer) >= w.bufferSize || time.Since(w.lastFlushTime) > w.flushInterval
+	// Check if flush is needed
+	shouldFlush := len(w.buffer) >= w.bufferSize ||
+		time.Since(w.lastFlushTime) >= w.flushInterval
 
-	if needFlush {
-		// 在鎖內調用內部方法
-		err := w.flushLocked()
-		w.mu.Unlock()
-		return err
+	if shouldFlush {
+		// Call internal method within lock
+		if err := w.flushLocked(); err != nil {
+			return err
+		}
 	}
 
-	w.mu.Unlock()
 	return nil
 }
 
-// Replay 重放所有 WAL 事件
+// Replay replays all WAL events
 //
-// 行為：
-// - 從頭讀取 WAL 檔案
-// - 驗證每個事件的 checksum
-// - 呼叫 handler 應用事件
-// - 遇到錯誤立即停止
+// Behavior:
+// - Read WAL file from beginning
+// - Verify checksum of each event
+// - Call handler to apply event
+// - Stop immediately on error
 //
-// 參數：
+// Parameters:
 //
-//	handler - 事件處理函式
+//	handler - Event handler function
 //
-// 回傳：
+// Returns:
 //
-//	錯誤（如果重放失敗）
-func (w *WAL) Replay(handler EventHandler) error {
-	// 加鎖保護，避免與其他操作衝突
+//	error (if replay fails)
+func (w *WAL) Replay(handler func(event *Event) error) error {
+	// Acquire lock to avoid conflicts with other operations
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// 重新開啟檔案（只讀模式）
+	// Reopen file (read-only mode)
 	file, err := os.Open(w.path)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open WAL for replay: %w", err)
 	}
 	defer file.Close()
 
-	// 建立 JSON decoder
+	// Create JSON decoder
 	decoder := json.NewDecoder(file)
 
-	// 循環讀取每個事件
-	for decoder.More() {
+	// Loop to read each event
+	for {
+		// Decode event
 		var event Event
-		// Decode 事件
-		if err := decoder.Decode(&event); err != nil {
-			return err
+		err := decoder.Decode(&event)
+		if err == io.EOF {
+			break
 		}
-
-		// 驗證 checksum（使用 VerifyChecksum）
+		if err != nil {
+			return fmt.Errorf("failed to decode event: %w", err)
+		}
+		
+		// Verify checksum (using VerifyChecksum)
 		if !VerifyChecksum(event) {
 			return ErrChecksumMismatch
 		}
 
-		// 呼叫 handler(event)
-		if err := handler(event); err != nil {
+		// Call handler(event)
+		if err := handler(&event); err != nil {
 			return err
 		}
 	}
@@ -311,16 +302,16 @@ func (w *WAL) Replay(handler EventHandler) error {
 	return nil
 }
 
-// Rotate 旋轉日誌檔案
+// Rotate rotates the log file
 //
-// 回傳：
+// Returns:
 //
-//	錯誤（如果旋轉失敗）
+//	error (if rotation fails)
 func (w *WAL) Rotate() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// 先 flush buffer，確保所有事件寫入
+	// Flush buffer first to ensure all events are written
 	if err := w.flushLocked(); err != nil {
 		return err
 	}
@@ -348,12 +339,12 @@ func (w *WAL) Rotate() error {
 	return nil
 }
 
-// Close 關閉 WAL
+// Close closes the WAL
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// 先 flush buffer，確保所有事件寫入
+	// Flush buffer first to ensure all events are written
 	if err := w.flushLocked(); err != nil {
 		return err
 	}
@@ -362,17 +353,17 @@ func (w *WAL) Close() error {
 		return err
 	}
 
-	// 決定：關閉後的 WAL 實例不建議重用。
-	//    原因：
-	//    - 檔案描述器與 encoder 已釋放，重用會造成錯誤（如 nil pointer）。
-	//    - Go 標準慣例：Close 後即失效，禁止再用。
-	//    - 明確禁止重用可提升安全性與可維護性。
+	// Decision: WAL instance should not be reused after Close.
+	//    Reasons:
+	//    - File descriptor and encoder are released, reuse will cause errors (like nil pointer).
+	//    - Go standard convention: Close invalidates the instance, must not be used again.
+	//    - Explicitly prohibiting reuse improves security and maintainability.
 	return nil
 }
 
-// GetLastSeq 取得當前的事件序號
+// GetLastSeq gets the current event sequence number
 //
-// 用途：快照時需要記錄 last_seq，確保恢復時知道從哪裡開始重放
+// Purpose: Need to record last_seq when taking snapshot to know where to start replay during recovery
 func (w *WAL) GetLastSeq() uint64 {
 	if w == nil {
 		return 0
@@ -384,21 +375,21 @@ func (w *WAL) GetLastSeq() uint64 {
 }
 
 // ============================================================================
-// 內部輔助方法（私有）
+// Internal Helper Methods (Private)
 // ============================================================================
 
-// 如果需要批次寫入優化，可以考慮以下私有方法：
+// If batch write optimization is needed, consider the following private methods:
 //
-// flush 公開方法，供外部調用（如 Close、Rotate）
-// 負責加鎖並調用內部實現
+// flush public method for external calls (such as Close, Rotate)
+// Responsible for locking and calling internal implementation
 func (w *WAL) flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.flushLocked()
 }
 
-// flushLocked 內部方法，假設調用者已經持有 w.mu 鎖
-// 將緩衝的事件批次寫入並同步到磁碟
+// flushLocked internal method, assumes caller already holds w.mu lock
+// Batch writes buffered events and syncs to disk
 func (w *WAL) flushLocked() error {
 	for _, event := range w.buffer {
 		if err := w.encoder.Encode(event); err != nil {
@@ -413,22 +404,22 @@ func (w *WAL) flushLocked() error {
 	return nil
 }
 
-// TODO: 進階優化思考
+// TODO: Advanced optimization considerations
 //
-// 4. 設計考慮：是否需要記錄重放進度（seq）？
-//    - 可在此處記錄設計相關問題，避免混入函式實作中。
+// 4. Design consideration: Do we need to record replay progress (seq)?
+//    - Can record design-related questions here to avoid mixing into function implementation.
 
 // ============================================================================
-// 進階優化：gzip 壓縮與多檔案管理（暫不引用）
+// Advanced Optimization: gzip Compression and Multi-file Management (Not referenced yet)
 // ============================================================================
 
-// gzip 壓縮 WAL 檔案
-// 最佳實踐：
-// - 只在檔案旋轉或快照時進行壓縮，避免每次寫入都壓縮造成效能瓶頸
-// - 檔名加 .gz，方便辨識
-// - 使用 io.Pipe + goroutine 可非同步壓縮，減少主流程阻塞ile(srcPath, dstPath string) error {
-// - 檔名加 .gz，方便辨識
-func compressWALFile(srcPath, dstPath string) error {
+// gzip compress WAL file
+// Best practices:
+// - Only compress during file rotation or snapshot, avoid compressing on every write to prevent performance bottleneck
+// - Add .gz to filename for easy identification
+// - Use io.Pipe + goroutine for async compression to reduce main flow blocking
+// - Add .gz to filename for easy identification
+func compressFile(srcPath, dstPath string) error {
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -440,64 +431,64 @@ func compressWALFile(srcPath, dstPath string) error {
 	}
 	defer dstFile.Close()
 
-	// 建立 gzip writer
+	// Create gzip writer
 	gzipWriter := gzip.NewWriter(dstFile)
 	defer gzipWriter.Close()
 
-	// 直接複製內容到壓縮檔
+	// Copy content directly to compressed file
 	_, err = io.Copy(gzipWriter, srcFile)
 	return err
 }
 
-// 多檔案管理：自動切分 WAL 檔案
-// 最佳實踐：
-// - 依檔案大小或事件數量自動切分
-// - 切分時保證事件完整性（不可中斷事件序列）
-// - 切分後檔名加序號或 timestamp，方便重放時排序
+// Multi-file management: Automatic WAL file splitting
+// Best practices:
+// - Split automatically based on file size or event count
+// - Ensure event integrity during splitting (cannot interrupt event sequence)
+// - Add sequence number or timestamp to split filenames for easy sorting during replay
 func splitWALFile(srcPath string, maxSize int64) ([]string, error) {
-	// 定義變數：files 儲存分檔路徑，srcFile 為來源檔案，outFile 為當前分檔
-	var files []string               // 儲存所有分檔的路徑
-	srcFile, err := os.Open(srcPath) // 開啟原始 WAL 檔案
+	// Define variables: files stores split file paths, srcFile is the source file, outFile is the current split file
+	var files []string               // Store paths of all split files
+	srcFile, err := os.Open(srcPath) // Open the original WAL file
 	if err != nil {
 		return nil, err
 	}
 	defer srcFile.Close()
 
-	// 建立 JSON 解碼器，逐行讀取事件
-	decoder := json.NewDecoder(srcFile) // 用於解析 WAL 檔案中的事件
-	var part int                        // 分檔的序號，用於生成分檔名稱
-	var currentSize int64               // 當前分檔的大小，用於判斷是否需要切分
-	var outFile *os.File                // 當前分檔的檔案指標
-	var encoder *json.Encoder           // 用於將事件寫入分檔的 JSON 編碼器
+	// Create JSON decoder to read events line by line
+	decoder := json.NewDecoder(srcFile) // Used to parse events in the WAL file
+	var part int                        // Split file sequence number, used to generate split file names
+	var currentSize int64               // Current split file size, used to determine if splitting is needed
+	var outFile *os.File                // File pointer for current split file
+	var encoder *json.Encoder           // JSON encoder for writing events to split file
 	for decoder.More() {
-		var event Event // 單個事件的結構
+		var event Event // Structure for a single event
 		if err := decoder.Decode(&event); err != nil {
 			return nil, err
 		}
-		// 若尚未建立分檔或已達最大大小，則新建分檔
+		// If no split file created yet or max size reached, create new split file
 		if outFile == nil || currentSize >= maxSize {
 			if outFile != nil {
 				outFile.Close()
 			}
 			part++
-			outPath := srcPath + ".part" + fmt.Sprintf("%03d", part) // 生成分檔名稱
-			outFile, err = os.Create(outPath)                        // 建立新分檔
+			outPath := srcPath + ".part" + fmt.Sprintf("%03d", part) // Generate split file name
+			outFile, err = os.Create(outPath)                        // Create new split file
 			if err != nil {
 				return nil, err
 			}
-			encoder = json.NewEncoder(outFile) // 初始化 JSON 編碼器
-			files = append(files, outPath)     // 將分檔路徑加入列表
+			encoder = json.NewEncoder(outFile) // Initialize JSON encoder
+			files = append(files, outPath)     // Add split file path to list
 			currentSize = 0
 		}
-		// 寫入事件到當前分檔
+		// Write event to current split file
 		if err := encoder.Encode(event); err != nil {
 			outFile.Close()
 			return nil, err
 		}
-		// 更新當前分檔大小
+		// Update current split file size
 		currentSize += int64(len(fmt.Sprintf("%v", event)))
 	}
-	// 關閉最後一個分檔
+	// Close the last split file
 	if outFile != nil {
 		outFile.Close()
 	}

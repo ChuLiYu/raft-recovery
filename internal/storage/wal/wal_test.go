@@ -1,8 +1,8 @@
 package wal
 
 // ============================================================================
-// WAL 測試檔案
-// 職責：驗證 WAL 的正確性、並發安全性與錯誤處理
+// WAL Test File
+// Responsibility: Verify WAL correctness, concurrency safety, and error handling
 // ============================================================================
 
 import (
@@ -18,26 +18,26 @@ import (
 )
 
 // ============================================================================
-// 基礎功能測試
+// Basic Functionality Tests
 // ============================================================================
 
-// TestNewWAL 測試 WAL 建立
+// TestNewWAL tests WAL creation
 func TestNewWAL(t *testing.T) {
 	tempFile := "test_wal.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 	assert.NotNil(t, wal)
 	assert.Equal(t, uint64(0), wal.seq)
 }
 
-// TestAppend 測試事件追加
+// TestAppend tests event appending
 func TestAppend(t *testing.T) {
 	tempFile := "test_wal_append.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	// Append a single event
@@ -46,7 +46,7 @@ func TestAppend(t *testing.T) {
 		JobID:     "job_1",
 		Timestamp: time.Now().UnixMilli(),
 	}
-	err = wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+	err = wal.Append(event.Type, &types.Job{ID: event.JobID})
 	assert.NoError(t, err)
 
 	// Append multiple events
@@ -55,7 +55,7 @@ func TestAppend(t *testing.T) {
 		{Type: "ACK", JobID: "job_3", Timestamp: time.Now().UnixMilli()},
 	}
 	for _, e := range events {
-		err = wal.Append(e.Type, types.Job{ID: e.JobID}, true)
+		err = wal.Append(e.Type, &types.Job{ID: e.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -80,12 +80,12 @@ func TestAppend(t *testing.T) {
 	}
 }
 
-// TestReplay 測試事件重放
+// TestReplay tests event replay
 func TestReplay(t *testing.T) {
 	tempFile := "test_wal_replay.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	// Append multiple events
@@ -95,7 +95,7 @@ func TestReplay(t *testing.T) {
 		{Type: "ACK", JobID: "job_3", Timestamp: time.Now().UnixMilli()},
 	}
 	for _, e := range events {
-		err = wal.Append(e.Type, types.Job{ID: e.JobID}, true)
+		err = wal.Append(e.Type, &types.Job{ID: e.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -105,12 +105,12 @@ func TestReplay(t *testing.T) {
 
 	// Replay events
 	replayedEvents := []Event{}
-	handler := func(e Event) error {
-		replayedEvents = append(replayedEvents, e)
+	handler := func(e *Event) error {
+		replayedEvents = append(replayedEvents, *e)
 		return nil
 	}
 
-	wal, err = NewWAL(tempFile, true)
+	wal, err = NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 	err = wal.Replay(handler)
 	assert.NoError(t, err)
@@ -125,12 +125,12 @@ func TestReplay(t *testing.T) {
 	}
 }
 
-// TestRotate 測試日誌旋轉
+// TestRotate tests log rotation
 func TestRotate(t *testing.T) {
 	tempFile := "test_wal.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	err = wal.Rotate()
@@ -140,7 +140,7 @@ func TestRotate(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestCompressWALFile 測試 WAL 檔案壓缩
+// TestCompressWALFile tests WAL file compression
 func TestCompressWALFile(t *testing.T) {
 	srcFile := "test_wal.log"
 	dstFile := "test_wal.log.gz"
@@ -155,14 +155,14 @@ func TestCompressWALFile(t *testing.T) {
 	_, err = file.WriteString("dummy data")
 	assert.NoError(t, err)
 
-	err = compressWALFile(srcFile, dstFile)
+	err = compressFile(srcFile, dstFile)
 	assert.NoError(t, err)
 
 	_, err = os.Stat(dstFile)
 	assert.NoError(t, err)
 }
 
-// TestSplitWALFile 測試 WAL 檔案分割
+// TestSplitWALFile tests WAL file splitting
 func TestSplitWALFile(t *testing.T) {
 	srcFile := "test_wal.log"
 	defer os.Remove(srcFile)
@@ -193,15 +193,15 @@ func TestSplitWALFile(t *testing.T) {
 }
 
 // ============================================================================
-// 錯誤處理測試
+// Error Handling Tests
 // ============================================================================
 
-// TestChecksumValidation 測試校驗和驗證
+// TestChecksumValidation tests checksum validation
 func TestChecksumValidation(t *testing.T) {
 	tempFile := "test_wal.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	event := Event{
@@ -210,7 +210,7 @@ func TestChecksumValidation(t *testing.T) {
 		JobID:     "job_123",
 		Timestamp: time.Now().UnixMilli(),
 	}
-	err = wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+	err = wal.Append(event.Type, &types.Job{ID: event.JobID})
 	assert.NoError(t, err)
 
 	// Close to flush
@@ -239,33 +239,33 @@ func TestChecksumValidation(t *testing.T) {
 	assert.NoError(t, err)
 	file.Close()
 
-	// Replay 應回傳 ErrChecksumMismatch
-	handler := func(e Event) error {
+	// Replay should return ErrChecksumMismatch
+	handler := func(e *Event) error {
 		return nil
 	}
-	wal, err = NewWAL(tempFile, true)
+	wal, err = NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 	err = wal.Replay(handler)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "checksum mismatch")
 }
 
-// TestCorruptedWAL 測試損壞的 WAL 處理
+// TestCorruptedWAL tests corrupted WAL handling
 func TestCorruptedWAL(t *testing.T) {
 	tempFile := "test_wal.log"
 	defer os.Remove(tempFile)
 
-	// 建立包含無效 JSON 的 WAL 檔案
+	// Create WAL file with invalid JSON
 	file, err := os.Create(tempFile)
 	assert.NoError(t, err)
 	_, err = file.WriteString("{invalid_json}")
 	assert.NoError(t, err)
 	file.Close()
 
-	// 嘗試 Replay
-	wal, err := NewWAL(tempFile, true)
+	// Attempt Replay
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
-	handler := func(e Event) error {
+	handler := func(e *Event) error {
 		return nil
 	}
 	err = wal.Replay(handler)
@@ -273,7 +273,7 @@ func TestCorruptedWAL(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid character")
 }
 
-// TestSyncFailure 測試 Sync 失敗處理
+// TestSyncFailure tests Sync failure handling
 func TestSyncFailure(t *testing.T) {
 	tempFile := "test_wal_sync_failure.log"
 	defer os.Remove(tempFile)
@@ -304,21 +304,21 @@ func TestSyncFailure(t *testing.T) {
 		JobID:     "job_1",
 		Timestamp: time.Now().UnixMilli(),
 	}
-	err := wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+	err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 	assert.Error(t, err)
 	assert.Equal(t, ErrSyncFailed, err)
 }
 
 // ============================================================================
-// 並發安全測試
+// Concurrency Safety Tests
 // ============================================================================
 
-// TestConcurrentAppend 測試並發寫入
+// TestConcurrentAppend tests concurrent writes
 func TestConcurrentAppend(t *testing.T) {
 	tempFile := "test_wal_concurrent_append.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	numGoroutines := 10
@@ -338,7 +338,7 @@ func TestConcurrentAppend(t *testing.T) {
 					JobID:     types.JobID(fmt.Sprintf("job_%d_%d", gid, j)),
 					Timestamp: time.Now().UnixMilli(),
 				}
-				err := wal.Append(event.Type, types.Job{ID: event.JobID}, false)
+				err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 				assert.NoError(t, err)
 			}
 		}(i)
@@ -366,12 +366,12 @@ func TestConcurrentAppend(t *testing.T) {
 	assert.Equal(t, totalEvents, len(loggedEvents))
 }
 
-// TestConcurrentReplay 測試並發重放（不應該並發）
+// TestConcurrentReplay tests concurrent replay (should not be concurrent)
 func TestConcurrentReplay(t *testing.T) {
 	tempFile := "test_wal_concurrent_replay.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	// Append events
@@ -380,7 +380,7 @@ func TestConcurrentReplay(t *testing.T) {
 		{Type: "DISPATCH", JobID: types.JobID("job_2"), Timestamp: time.Now().UnixMilli()},
 	}
 	for _, e := range events {
-		err = wal.Append(e.Type, types.Job{ID: e.JobID}, false)
+		err = wal.Append(e.Type, &types.Job{ID: e.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -389,7 +389,7 @@ func TestConcurrentReplay(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Attempt concurrent replay
-	wal, err = NewWAL(tempFile, true)
+	wal, err = NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -402,8 +402,8 @@ func TestConcurrentReplay(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		localEvents := []Event{}
-		handler := func(e Event) error {
-			localEvents = append(localEvents, e)
+		handler := func(e *Event) error {
+			localEvents = append(localEvents, *e)
 			return nil
 		}
 		err := wal.Replay(handler)
@@ -417,8 +417,8 @@ func TestConcurrentReplay(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		localEvents := []Event{}
-		handler := func(e Event) error {
-			localEvents = append(localEvents, e)
+		handler := func(e *Event) error {
+			localEvents = append(localEvents, *e)
 			return nil
 		}
 		err := wal.Replay(handler)
@@ -449,15 +449,15 @@ func TestConcurrentReplay(t *testing.T) {
 }
 
 // ============================================================================
-// 整合測試
+// Integration Tests
 // ============================================================================
 
-// TestWALLifecycle 測試完整生命週期
+// TestWALLifecycle tests full lifecycle
 func TestWALLifecycle(t *testing.T) {
 	tempFile := "test_wal_lifecycle.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	// Write 100 events
@@ -467,7 +467,7 @@ func TestWALLifecycle(t *testing.T) {
 			JobID:     types.JobID(fmt.Sprintf("job_%d", i)),
 			Timestamp: time.Now().UnixMilli(),
 		}
-		err := wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+		err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -482,7 +482,7 @@ func TestWALLifecycle(t *testing.T) {
 			JobID:     types.JobID(fmt.Sprintf("job_%d", i)),
 			Timestamp: time.Now().UnixMilli(),
 		}
-		err := wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+		err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -492,12 +492,12 @@ func TestWALLifecycle(t *testing.T) {
 
 	// Reopen WAL and replay
 	replayedEvents := []Event{}
-	handler := func(e Event) error {
-		replayedEvents = append(replayedEvents, e)
+	handler := func(e *Event) error {
+		replayedEvents = append(replayedEvents, *e)
 		return nil
 	}
 
-	wal, err = NewWAL(tempFile, true)
+	wal, err = NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 	err = wal.Replay(handler)
 	assert.NoError(t, err)
@@ -511,12 +511,12 @@ func TestWALLifecycle(t *testing.T) {
 	}
 }
 
-// TestSnapshotIntegration 測試與 Snapshot 的整合
+// TestSnapshotIntegration tests integration with Snapshot
 func TestSnapshotIntegration(t *testing.T) {
 	tempFile := "test_wal_snapshot_integration.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 
 	// Write events 1-100
@@ -526,7 +526,7 @@ func TestSnapshotIntegration(t *testing.T) {
 			JobID:     types.JobID(fmt.Sprintf("job_%d", i)),
 			Timestamp: time.Now().UnixMilli(),
 		}
-		err := wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+		err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -547,7 +547,7 @@ func TestSnapshotIntegration(t *testing.T) {
 			JobID:     types.JobID(fmt.Sprintf("job_%d", i)),
 			Timestamp: time.Now().UnixMilli(),
 		}
-		err := wal.Append(event.Type, types.Job{ID: event.JobID}, true)
+		err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 		assert.NoError(t, err)
 	}
 
@@ -556,12 +556,12 @@ func TestSnapshotIntegration(t *testing.T) {
 	assert.NoError(t, err)
 
 	replayedEvents := []Event{}
-	handler := func(e Event) error {
-		replayedEvents = append(replayedEvents, e)
+	handler := func(e *Event) error {
+		replayedEvents = append(replayedEvents, *e)
 		return nil
 	}
 
-	wal, err = NewWAL(tempFile, true)
+	wal, err = NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	assert.NoError(t, err)
 	err = wal.Replay(handler)
 	assert.NoError(t, err)
@@ -577,15 +577,15 @@ func TestSnapshotIntegration(t *testing.T) {
 }
 
 // ============================================================================
-// 效能測試（Benchmark）
+// Performance tests (Benchmark)
 // ============================================================================
 
-// BenchmarkAppend 測試寫入效能
+// BenchmarkAppend tests write performance
 func BenchmarkAppend(b *testing.B) {
 	tempFile := "benchmark_wal_append.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	if err != nil {
 		b.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -598,19 +598,19 @@ func BenchmarkAppend(b *testing.B) {
 			JobID:     types.JobID(fmt.Sprintf("job_%d", i)),
 			Timestamp: time.Now().UnixMilli(),
 		}
-		err := wal.Append(event.Type, types.Job{ID: event.JobID}, false)
+		err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 		if err != nil {
 			b.Fatalf("Failed to append event: %v", err)
 		}
 	}
 }
 
-// BenchmarkReplay 測試重放效能
+// BenchmarkReplay tests replay performance
 func BenchmarkReplay(b *testing.B) {
 	tempFile := "benchmark_wal_replay.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	if err != nil {
 		b.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -624,7 +624,7 @@ func BenchmarkReplay(b *testing.B) {
 			JobID:     types.JobID(fmt.Sprintf("job_%d", i)),
 			Timestamp: time.Now().UnixMilli(),
 		}
-		err := wal.Append(event.Type, types.Job{ID: event.JobID}, false)
+		err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 		if err != nil {
 			b.Fatalf("Failed to append event: %v", err)
 		}
@@ -637,13 +637,13 @@ func BenchmarkReplay(b *testing.B) {
 	}
 
 	// Benchmark replay
-	handler := func(e Event) error {
+	handler := func(e *Event) error {
 		return nil
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		wal, err := NewWAL(tempFile, true)
+		wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 		if err != nil {
 			b.Fatalf("Failed to reopen WAL: %v", err)
 		}
@@ -655,12 +655,12 @@ func BenchmarkReplay(b *testing.B) {
 	}
 }
 
-// BenchmarkBatchWriter 測試批次寫入效能
+// BenchmarkBatchWriter tests batch write performance
 func BenchmarkBatchWriter(b *testing.B) {
 	tempFile := "benchmark_wal_batch_writer.log"
 	defer os.Remove(tempFile)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	if err != nil {
 		b.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -678,7 +678,7 @@ func BenchmarkBatchWriter(b *testing.B) {
 						JobID:     types.JobID(fmt.Sprintf("job_%d_%d", i, j)),
 						Timestamp: time.Now().UnixMilli(),
 					}
-					err := wal.Append(event.Type, types.Job{ID: event.JobID}, false)
+					err := wal.Append(event.Type, &types.Job{ID: event.JobID})
 					if err != nil {
 						b.Fatalf("Failed to append event: %v", err)
 					}
@@ -689,15 +689,15 @@ func BenchmarkBatchWriter(b *testing.B) {
 }
 
 // ============================================================================
-// 輔助函式
+// Helper functions
 // ============================================================================
 
-// helper: 建立臨時 WAL 檔案
+// helper: create temporary WAL file
 func createTempWAL(t *testing.T) (*WAL, string) {
 	tempDir := t.TempDir()
 	tempFile := fmt.Sprintf("%s/test_wal.log", tempDir)
 
-	wal, err := NewWAL(tempFile, true)
+	wal, err := NewWAL(tempFile, true, 100, 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -705,7 +705,7 @@ func createTempWAL(t *testing.T) (*WAL, string) {
 	return wal, tempFile
 }
 
-// helper: 驗證事件內容
+// helper: verify event contents
 func verifyEvent(t *testing.T, event Event, expectedType EventType, expectedJobID types.JobID) {
 	if event.Type != expectedType {
 		t.Errorf("Expected Type %v, got %v", expectedType, event.Type)
@@ -718,7 +718,7 @@ func verifyEvent(t *testing.T, event Event, expectedType EventType, expectedJobI
 	}
 }
 
-// helper: 建立 mock handler
+// helper: create mock handler
 func mockHandler(events *[]Event) EventHandler {
 	return func(e Event) error {
 		*events = append(*events, e)
