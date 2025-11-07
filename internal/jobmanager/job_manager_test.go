@@ -11,15 +11,15 @@ import (
 )
 
 // ============================================================================
-// 測試輔助函數
+// Test Helper Functions
 // ============================================================================
 
-// newTestJobManager 建立測試用的 JobManager
+// newTestJobManager creates a test JobManager
 func newTestJobManager() *JobManager {
 	return NewJobManager()
 }
 
-// newTestJob 建立測試用的 Job
+// newTestJob creates a test Job
 func newTestJob(id string) types.Job {
 	return types.Job{
 		ID:      types.JobID(id),
@@ -28,7 +28,7 @@ func newTestJob(id string) types.Job {
 	}
 }
 
-// assertNoError 斷言沒有錯誤
+// assertNoError asserts no error occurred
 func assertNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -36,7 +36,7 @@ func assertNoError(t *testing.T, err error) {
 	}
 }
 
-// assertError 斷言有特定錯誤
+// assertError asserts a specific error occurred
 func assertError(t *testing.T, err error, want error) {
 	t.Helper()
 	if err == nil {
@@ -48,15 +48,9 @@ func assertError(t *testing.T, err error, want error) {
 	}
 }
 
-// assertEqual 斷言兩個值相等
-func assertEqual(t *testing.T, got, want interface{}) {
-	t.Helper()
-	if got != want {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
+// (removed) assertEqual helper was unused
 
-// assertJobStatus 斷言任務狀態
+// assertJobStatus asserts job status
 func assertJobStatus(t *testing.T, jm *JobManager, jobID types.JobID, want types.JobStatus) {
 	t.Helper()
 	job, exists := jm.jobs[jobID]
@@ -70,13 +64,13 @@ func assertJobStatus(t *testing.T, jm *JobManager, jobID types.JobID, want types
 }
 
 // ============================================================================
-// 單元測試
+// Unit Tests
 // ============================================================================
 
 func TestNewJobManager(t *testing.T) {
 	jm := NewJobManager()
 
-	// 驗證所有欄位都已初始化
+	// Verify all fields are initialized
 	if jm.jobs == nil {
 		t.Error("jobs map not initialized")
 	}
@@ -93,7 +87,7 @@ func TestNewJobManager(t *testing.T) {
 		t.Error("dead map not initialized")
 	}
 
-	// 驗證初始狀態
+	// Verify initial state
 	stats := jm.Stats()
 	expectedStats := map[string]int{
 		"pending":   0,
@@ -116,25 +110,25 @@ func TestEnqueue(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name:    "正常加入單個任務",
+			name:    "Normal single job enqueue",
 			setup:   func(jm *JobManager) {},
 			job:     newTestJob("task-001"),
 			wantErr: nil,
 		},
 		{
-			name:    "加入多個任務",
+			name:    "Enqueue multiple jobs",
 			setup:   func(jm *JobManager) { jm.Enqueue(newTestJob("task-001")) },
 			job:     newTestJob("task-002"),
 			wantErr: nil,
 		},
 		{
-			name:    "重複 ID 錯誤",
+			name:    "Duplicate ID error",
 			setup:   func(jm *JobManager) { jm.Enqueue(newTestJob("task-001")) },
 			job:     newTestJob("task-001"),
 			wantErr: ErrDuplicateJob,
 		},
 		{
-			name:    "空 ID 處理",
+			name:    "Empty ID handling",
 			setup:   func(jm *JobManager) {},
 			job:     newTestJob(""),
 			wantErr: nil,
@@ -152,11 +146,11 @@ func TestEnqueue(t *testing.T) {
 				assertError(t, err, tt.wantErr)
 			} else {
 				assertNoError(t, err)
-				// 驗證任務已加入
+				// verify job is enqueued
 				if _, exists := jm.jobs[tt.job.ID]; !exists {
 					t.Errorf("job %s not found in jobs map", tt.job.ID)
 				}
-				// 驗證任務在 queue 中
+				// verifyJob in queue in
 				found := false
 				for _, id := range jm.queue {
 					if id == tt.job.ID {
@@ -167,7 +161,7 @@ func TestEnqueue(t *testing.T) {
 				if !found {
 					t.Errorf("job %s not found in queue", tt.job.ID)
 				}
-				// 驗證狀態
+				// verify state
 				assertJobStatus(t, jm, tt.job.ID, types.StatusPending)
 			}
 		})
@@ -182,12 +176,12 @@ func TestPopPending(t *testing.T) {
 		wantNil bool
 	}{
 		{
-			name:    "空佇列回傳 nil",
+			name:    "Empty queue returns nil",
 			setup:   func(jm *JobManager) {},
 			wantNil: true,
 		},
 		{
-			name: "FIFO 順序正確",
+			name: "FIFO order correct",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.Enqueue(newTestJob("task-002"))
@@ -195,7 +189,7 @@ func TestPopPending(t *testing.T) {
 			wantJob: &types.Job{ID: "task-001"},
 		},
 		{
-			name: "連續 pop 直到空",
+			name: "Consecutive pop until empty",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -222,8 +216,8 @@ func TestPopPending(t *testing.T) {
 				if job.ID != tt.wantJob.ID {
 					t.Errorf("got job ID %s, want %s", job.ID, tt.wantJob.ID)
 				}
-				// 驗證 queue 已更新
-				if len(jm.queue) == 0 && tt.name == "FIFO 順序正確" {
+				// verify queue is updated
+				if len(jm.queue) == 0 && tt.name == "FIFO order correct" {
 					t.Error("queue should not be empty after first pop")
 				}
 			}
@@ -240,7 +234,7 @@ func TestMarkInFlight(t *testing.T) {
 		wantErr  error
 	}{
 		{
-			name: "正常標記為執行中",
+			name: "Mark in-flight (normal path)",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -249,14 +243,14 @@ func TestMarkInFlight(t *testing.T) {
 			wantErr:  nil,
 		},
 		{
-			name:     "任務不存在錯誤",
+			name:     "Job does not exist error",
 			setup:    func(jm *JobManager) {},
 			jobID:    "task-001",
 			deadline: time.Now().Add(time.Minute),
 			wantErr:  ErrJobNotFound,
 		},
 		{
-			name: "任務狀態不是 Pending 錯誤",
+			name: "Job not in pending state error",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -283,18 +277,18 @@ func TestMarkInFlight(t *testing.T) {
 				}
 			} else {
 				assertNoError(t, err)
-				// 驗證 inFlight 集合正確更新
+				// verify inFlight set updated correctly
 				if _, exists := jm.inFlight[tt.jobID]; !exists {
 					t.Errorf("job %s not found in inFlight", tt.jobID)
 				}
-				// 驗證 Deadline 設定正確
+				// verify deadline is set correctly
 				job := jm.jobs[tt.jobID]
 				if job.Deadline == nil {
 					t.Error("deadline not set")
 				} else if *job.Deadline != tt.deadline.UnixMilli() {
 					t.Errorf("deadline: got %d, want %d", *job.Deadline, tt.deadline.UnixMilli())
 				}
-				// 驗證狀態
+				// verify state
 				assertJobStatus(t, jm, tt.jobID, types.StatusInFlight)
 			}
 		})
@@ -309,7 +303,7 @@ func TestMarkCompleted(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "正常完成",
+			name: "Complete normally",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -319,13 +313,13 @@ func TestMarkCompleted(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "任務不存在錯誤",
+			name:    "Job does not exist error",
 			setup:   func(jm *JobManager) {},
 			jobID:   "task-001",
 			wantErr: ErrJobNotFound,
 		},
 		{
-			name: "任務不在執行中錯誤",
+			name: "Job not in flight error",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -345,15 +339,15 @@ func TestMarkCompleted(t *testing.T) {
 				assertError(t, err, tt.wantErr)
 			} else {
 				assertNoError(t, err)
-				// 驗證從 inFlight 移除
+				// verify removed from inFlight
 				if _, exists := jm.inFlight[tt.jobID]; exists {
 					t.Errorf("job %s still in inFlight", tt.jobID)
 				}
-				// 驗證加入 completed
+				// verify added to completed
 				if _, exists := jm.completed[tt.jobID]; !exists {
 					t.Errorf("job %s not found in completed", tt.jobID)
 				}
-				// 驗證狀態
+				// verify state
 				assertJobStatus(t, jm, tt.jobID, types.StatusCompleted)
 			}
 		})
@@ -368,7 +362,7 @@ func TestRequeue(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "正常重新排隊",
+			name: "Requeue normally",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -378,13 +372,13 @@ func TestRequeue(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "任務不存在錯誤",
+			name:    "Job does not exist error",
 			setup:   func(jm *JobManager) {},
 			jobID:   "task-001",
 			wantErr: ErrJobNotFound,
 		},
 		{
-			name: "任務不在執行中錯誤",
+			name: "Job not in flight error",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -408,12 +402,12 @@ func TestRequeue(t *testing.T) {
 				assertError(t, err, tt.wantErr)
 			} else {
 				assertNoError(t, err)
-				// 驗證 Attempt 正確增加
+				// verify attempt incremented
 				newAttempt := jm.jobs[tt.jobID].Attempt
 				if newAttempt != originalAttempt+1 {
 					t.Errorf("attempt: got %d, want %d", newAttempt, originalAttempt+1)
 				}
-				// 驗證重新加入 queue 尾端
+				// verify re-added to end of queue
 				if len(jm.queue) == 0 {
 					t.Error("queue should not be empty after requeue")
 				}
@@ -421,7 +415,7 @@ func TestRequeue(t *testing.T) {
 				if lastJobID != tt.jobID {
 					t.Errorf("last job in queue: got %s, want %s", lastJobID, tt.jobID)
 				}
-				// 驗證狀態
+				// verify state
 				assertJobStatus(t, jm, tt.jobID, types.StatusPending)
 			}
 		})
@@ -436,7 +430,7 @@ func TestMarkDead(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "正常標記為死信",
+			name: "Mark as dead (normal path)",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -444,7 +438,7 @@ func TestMarkDead(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "任務不存在錯誤",
+			name:    "Job does not exist error",
 			setup:   func(jm *JobManager) {},
 			jobID:   "task-001",
 			wantErr: ErrJobNotFound,
@@ -462,11 +456,11 @@ func TestMarkDead(t *testing.T) {
 				assertError(t, err, tt.wantErr)
 			} else {
 				assertNoError(t, err)
-				// 驗證加入 dead 集合
+				// verify added to dead set
 				if _, exists := jm.dead[tt.jobID]; !exists {
 					t.Errorf("job %s not found in dead", tt.jobID)
 				}
-				// 驗證狀態更新正確
+				// verify stateupdatedcorrect
 				assertJobStatus(t, jm, tt.jobID, types.StatusDead)
 			}
 		})
@@ -485,13 +479,13 @@ func TestGetExpiredJobs(t *testing.T) {
 		wantExpired []types.JobID
 	}{
 		{
-			name:        "無過期任務",
+			name:        "No expired jobs",
 			setup:       func(jm *JobManager) {},
 			now:         now,
 			wantExpired: []types.JobID{},
 		},
 		{
-			name: "單個過期任務",
+			name: "Single expired job",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -501,7 +495,7 @@ func TestGetExpiredJobs(t *testing.T) {
 			wantExpired: []types.JobID{"task-001"},
 		},
 		{
-			name: "多個過期任務",
+			name: "Multiple expired jobs",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.Enqueue(newTestJob("task-002"))
@@ -514,7 +508,7 @@ func TestGetExpiredJobs(t *testing.T) {
 			wantExpired: []types.JobID{"task-001", "task-002"},
 		},
 		{
-			name: "混合過期和未過期",
+			name: "Mixed expired and non-expired",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.Enqueue(newTestJob("task-002"))
@@ -527,7 +521,7 @@ func TestGetExpiredJobs(t *testing.T) {
 			wantExpired: []types.JobID{"task-001"},
 		},
 		{
-			name: "邊界條件（deadline 剛好等於 now）",
+			name: "Boundary condition (deadline exactly now)",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -550,7 +544,7 @@ func TestGetExpiredJobs(t *testing.T) {
 				return
 			}
 
-			// 檢查是否包含所有期望的過期任務
+			// verify contains all expected expired jobs
 			for _, wantJobID := range tt.wantExpired {
 				found := false
 				for _, gotJobID := range expired {
@@ -574,14 +568,14 @@ func TestStats(t *testing.T) {
 		wantStats map[string]int
 	}{
 		{
-			name:      "空狀態統計",
+			name:      "Empty state stats",
 			setup:     func(jm *JobManager) {},
 			wantStats: map[string]int{"pending": 0, "in_flight": 0, "completed": 0, "dead": 0},
 		},
 		{
-			name: "各狀態都有任務",
+			name: "Jobs in all states",
 			setup: func(jm *JobManager) {
-				// 建立一個更簡單的測試場景
+				// create a simpler test scenario
 				// InFlight
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -595,7 +589,7 @@ func TestStats(t *testing.T) {
 
 				// Dead
 				jm.Enqueue(newTestJob("task-003"))
-				jm.PopPending() // 先從 queue 移除
+				jm.PopPending() // remove from queue first
 				jm.MarkDead("task-003")
 			},
 			wantStats: map[string]int{"pending": 0, "in_flight": 1, "completed": 1, "dead": 1},
@@ -619,13 +613,13 @@ func TestStats(t *testing.T) {
 }
 
 // ============================================================================
-// 整合測試
+// Integration tests
 // ============================================================================
 
 func TestJobLifecycle(t *testing.T) {
 	jm := newTestJobManager()
 
-	// 測試完整生命週期：Enqueue -> PopPending -> MarkInFlight -> MarkCompleted
+	// Test full lifecycle: Enqueue -> PopPending -> MarkInFlight -> MarkCompleted
 	job := newTestJob("task-001")
 
 	// Enqueue
@@ -650,7 +644,7 @@ func TestJobLifecycle(t *testing.T) {
 	assertNoError(t, err)
 	assertJobStatus(t, jm, "task-001", types.StatusCompleted)
 
-	// 驗證最終狀態
+	// verify final state
 	stats := jm.Stats()
 	if stats["completed"] != 1 {
 		t.Errorf("expected 1 completed job, got %d", stats["completed"])
@@ -660,7 +654,7 @@ func TestJobLifecycle(t *testing.T) {
 func TestJobLifecycleWithRetry(t *testing.T) {
 	jm := newTestJobManager()
 
-	// 測試重試生命週期：Enqueue -> PopPending -> MarkInFlight -> Requeue -> MarkInFlight -> MarkDead
+	// Test retry lifecycle: Enqueue -> PopPending -> MarkInFlight -> Requeue -> MarkInFlight -> MarkDead
 	job := newTestJob("task-001")
 
 	// Enqueue
@@ -678,21 +672,21 @@ func TestJobLifecycleWithRetry(t *testing.T) {
 	err = jm.MarkInFlight("task-001", deadline)
 	assertNoError(t, err)
 
-	// Requeue (模擬失敗重試)
+	// Requeue (simulate failed retry)
 	err = jm.Requeue("task-001")
 	assertNoError(t, err)
 	assertJobStatus(t, jm, "task-001", types.StatusPending)
 
-	// 再次 MarkInFlight
+	// MarkInFlight again
 	err = jm.MarkInFlight("task-001", deadline)
 	assertNoError(t, err)
 
-	// MarkDead (模擬超過重試次數)
+	// MarkDead (simulate exceeding retry count)
 	err = jm.MarkDead("task-001")
 	assertNoError(t, err)
 	assertJobStatus(t, jm, "task-001", types.StatusDead)
 
-	// 驗證最終狀態
+	// verify final state
 	stats := jm.Stats()
 	if stats["dead"] != 1 {
 		t.Errorf("expected 1 dead job, got %d", stats["dead"])
@@ -702,7 +696,7 @@ func TestJobLifecycleWithRetry(t *testing.T) {
 func TestStateInvariants(t *testing.T) {
 	jm := newTestJobManager()
 
-	// 添加多個任務並進行各種操作
+	// Add multiple jobs and perform various operations
 	jm.Enqueue(newTestJob("task-001"))
 	jm.Enqueue(newTestJob("task-002"))
 	jm.Enqueue(newTestJob("task-003"))
@@ -716,22 +710,22 @@ func TestStateInvariants(t *testing.T) {
 
 	jm.MarkDead("task-003")
 
-	// 驗證不變性：每個任務只存在於一個集合
+	// verify immutability: each job belongs to exactly one set
 	allJobIDs := make(map[types.JobID]bool)
 
-	// 收集所有任務 ID
+	// collect all job IDs
 	for jobID := range jm.jobs {
 		allJobIDs[jobID] = true
 	}
 
-	// 驗證 jobs map 包含所有任務
+	// verify jobs map contains all jobs
 	if len(allJobIDs) != 3 {
 		t.Errorf("expected 3 jobs in jobs map, got %d", len(allJobIDs))
 	}
 
-	// 驗證狀態轉換一致性
-	// 注意：PopPending 會從 queue 中移除任務，但任務仍在 jobs map 中
-	// 所以我們需要檢查實際的任務狀態
+	// verify state transition consistency
+	// Note: PopPending removes job from queue, but job remains in jobs map
+	// therefore we need to check actual job state
 	actualTotal := 0
 	for _, job := range jm.jobs {
 		switch job.Status {
@@ -751,7 +745,7 @@ func TestStateInvariants(t *testing.T) {
 }
 
 // ============================================================================
-// 併發測試
+// Concurrent tests
 // ============================================================================
 
 func TestConcurrentEnqueue(t *testing.T) {
@@ -780,12 +774,12 @@ func TestConcurrentEnqueue(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// 檢查是否有錯誤
+	// ensure no errors
 	for err := range errors {
 		t.Errorf("concurrent enqueue error: %v", err)
 	}
 
-	// 驗證所有任務都已加入
+	// verify all jobs were added
 	stats := jm.Stats()
 	expectedTotal := numGoroutines * jobsPerGoroutine
 	if stats["pending"] != expectedTotal {
@@ -838,12 +832,12 @@ func TestConcurrentOperations(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// 檢查是否有錯誤
+	// ensure no errors
 	for err := range errors {
 		t.Errorf("concurrent operation error: %v", err)
 	}
 
-	// 驗證資料一致性
+	// verify data consistency
 	stats := jm.Stats()
 	if stats["pending"] != 0 {
 		t.Errorf("expected 0 pending jobs, got %d", stats["pending"])
@@ -854,7 +848,7 @@ func TestConcurrentOperations(t *testing.T) {
 }
 
 // ============================================================================
-// 效能測試（Benchmarks）
+// Performance tests (Benchmarks)
 // ============================================================================
 
 func BenchmarkEnqueue(b *testing.B) {
@@ -871,7 +865,7 @@ func BenchmarkEnqueue(b *testing.B) {
 func BenchmarkPopPending(b *testing.B) {
 	jm := NewJobManager()
 
-	// 預先填充
+	// prefill
 	for i := 0; i < b.N; i++ {
 		job := newTestJob(fmt.Sprintf("job-%d", i))
 		jm.Enqueue(job)
@@ -887,7 +881,7 @@ func BenchmarkMarkInFlight(b *testing.B) {
 	jm := NewJobManager()
 	deadline := time.Now().Add(time.Minute)
 
-	// 預先填充
+	// prefill
 	for i := 0; i < b.N; i++ {
 		job := newTestJob(fmt.Sprintf("job-%d", i))
 		jm.Enqueue(job)
@@ -923,7 +917,7 @@ func BenchmarkConcurrentMixed(b *testing.B) {
 			jobID := types.JobID(fmt.Sprintf("job-%d", i))
 			job := newTestJob(string(jobID))
 
-			// 混合操作
+			// mixed operations
 			jm.Enqueue(job)
 			if poppedJob := jm.PopPending(); poppedJob != nil {
 				jm.MarkInFlight(poppedJob.ID, deadline)
@@ -937,7 +931,7 @@ func BenchmarkConcurrentMixed(b *testing.B) {
 func BenchmarkStats(b *testing.B) {
 	jm := NewJobManager()
 
-	// 預先填充
+	// prefill
 	for i := 0; i < 1000; i++ {
 		job := newTestJob(fmt.Sprintf("job-%d", i))
 		jm.Enqueue(job)
@@ -950,7 +944,7 @@ func BenchmarkStats(b *testing.B) {
 }
 
 // ============================================================================
-// 新增方法測試（Snapshot, Restore, IsCompleted, IsDead, GetJob）
+// New methods tests (Snapshot, Restore, IsCompleted, IsDead, GetJob)
 // ============================================================================
 
 func TestSnapshot(t *testing.T) {
@@ -960,14 +954,14 @@ func TestSnapshot(t *testing.T) {
 		want  func(types.SnapshotData) bool
 	}{
 		{
-			name:  "空狀態快照",
+			name:  "Empty state snapshot",
 			setup: func(jm *JobManager) {},
 			want: func(data types.SnapshotData) bool {
 				return len(data.Jobs) == 0 && data.SchemaVer == 1
 			},
 		},
 		{
-			name: "包含各種狀態的快照",
+			name: "Snapshot with various states",
 			setup: func(jm *JobManager) {
 				// Pending
 				jm.Enqueue(newTestJob("task-001"))
@@ -994,7 +988,7 @@ func TestSnapshot(t *testing.T) {
 				if data.SchemaVer != 1 {
 					return false
 				}
-				// 驗證每個任務的狀態
+				// verify each job's state
 				if data.Jobs["task-001"].Status != types.StatusPending {
 					return false
 				}
@@ -1034,7 +1028,7 @@ func TestRestore(t *testing.T) {
 		verify  func(*testing.T, *JobManager)
 	}{
 		{
-			name: "恢復空快照",
+			name: "Restore empty snapshot",
 			data: types.SnapshotData{
 				Jobs:      make(map[types.JobID]*types.Job),
 				SchemaVer: 1,
@@ -1049,7 +1043,7 @@ func TestRestore(t *testing.T) {
 			},
 		},
 		{
-			name: "恢復包含各種狀態的快照",
+			name: "Restore snapshot with various states",
 			data: types.SnapshotData{
 				Jobs: map[types.JobID]*types.Job{
 					"task-001": {
@@ -1091,7 +1085,7 @@ func TestRestore(t *testing.T) {
 					t.Errorf("expected 1 dead job, got %d", stats["dead"])
 				}
 
-				// 驗證每個任務的狀態
+				// verify each job's state
 				if job := jm.GetJob("task-001"); job == nil || job.Status != types.StatusPending {
 					t.Error("task-001 status incorrect")
 				}
@@ -1127,10 +1121,10 @@ func TestRestore(t *testing.T) {
 }
 
 func TestSnapshotAndRestore(t *testing.T) {
-	// 創建第一個 JobManager 並添加數據
+	// Create first JobManager and add data
 	jm1 := newTestJobManager()
 
-	// 添加各種狀態的任務（確保狀態一致）
+	// Add jobs in various states (ensure consistency)
 	// Pending
 	jm1.Enqueue(newTestJob("task-001"))
 
@@ -1147,18 +1141,18 @@ func TestSnapshotAndRestore(t *testing.T) {
 
 	// Dead
 	jm1.Enqueue(newTestJob("task-004"))
-	jm1.PopPending() // 先從 queue 移除
+	jm1.PopPending() // remove from queue first
 	jm1.MarkDead("task-004")
 
-	// 生成快照
+	// Generate snapshot
 	snapshot := jm1.Snapshot()
 
-	// 創建第二個 JobManager 並恢復
+	// Create second JobManager and restore
 	jm2 := newTestJobManager()
 	err := jm2.Restore(snapshot)
 	assertNoError(t, err)
 
-	// 比較兩個 JobManager 的狀態
+	// Compare the state of the two JobManagers
 	stats1 := jm1.Stats()
 	stats2 := jm2.Stats()
 
@@ -1168,7 +1162,7 @@ func TestSnapshotAndRestore(t *testing.T) {
 		}
 	}
 
-	// 驗證每個任務的詳細資訊
+	// verify each job's details
 	for jobID, job1 := range jm1.jobs {
 		job2 := jm2.GetJob(jobID)
 		if job2 == nil {
@@ -1192,13 +1186,13 @@ func TestIsCompleted(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "任務不存在",
+			name:  "Job does not exist",
 			setup: func(jm *JobManager) {},
 			jobID: "task-001",
 			want:  false,
 		},
 		{
-			name: "任務處於 Pending 狀態",
+			name: "job in Pending state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -1206,7 +1200,7 @@ func TestIsCompleted(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "任務處於 InFlight 狀態",
+			name: "job in InFlight state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -1216,7 +1210,7 @@ func TestIsCompleted(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "任務處於 Completed 狀態",
+			name: "job in Completed state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -1227,7 +1221,7 @@ func TestIsCompleted(t *testing.T) {
 			want:  true,
 		},
 		{
-			name: "任務處於 Dead 狀態",
+			name: "job in Dead state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.MarkDead("task-001")
@@ -1259,13 +1253,13 @@ func TestIsDead(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "任務不存在",
+			name:  "Job does not exist",
 			setup: func(jm *JobManager) {},
 			jobID: "task-001",
 			want:  false,
 		},
 		{
-			name: "任務處於 Pending 狀態",
+			name: "job in Pending state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -1273,7 +1267,7 @@ func TestIsDead(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "任務處於 InFlight 狀態",
+			name: "job in InFlight state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -1283,7 +1277,7 @@ func TestIsDead(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "任務處於 Completed 狀態",
+			name: "job in Completed state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -1294,7 +1288,7 @@ func TestIsDead(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "任務處於 Dead 狀態",
+			name: "job in Dead state",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.MarkDead("task-001")
@@ -1327,13 +1321,13 @@ func TestGetJob(t *testing.T) {
 		verify  func(*testing.T, *types.Job)
 	}{
 		{
-			name:    "任務不存在",
+			name:    "Job does not exist",
 			setup:   func(jm *JobManager) {},
 			jobID:   "task-001",
 			wantNil: true,
 		},
 		{
-			name: "取得 Pending 任務",
+			name: "Get Pending job",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 			},
@@ -1346,7 +1340,7 @@ func TestGetJob(t *testing.T) {
 			},
 		},
 		{
-			name: "取得 InFlight 任務",
+			name: "Get InFlight job",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -1364,7 +1358,7 @@ func TestGetJob(t *testing.T) {
 			},
 		},
 		{
-			name: "取得 Completed 任務",
+			name: "Get Completed job",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.PopPending()
@@ -1380,7 +1374,7 @@ func TestGetJob(t *testing.T) {
 			},
 		},
 		{
-			name: "取得 Dead 任務",
+			name: "Get Dead job",
 			setup: func(jm *JobManager) {
 				jm.Enqueue(newTestJob("task-001"))
 				jm.MarkDead("task-001")

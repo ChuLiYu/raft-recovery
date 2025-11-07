@@ -1,56 +1,56 @@
 // ============================================================================
-// Beaver-Raft 任務管理器 - 任務狀態機實現
+// Beaver-Raft Job Manager - State Machine Implementation
 // ============================================================================
 //
 // Package: internal/jobmanager
-// 文件: job_manager.go
-// 功能: 管理任務的完整生命週期和狀態轉換
+// File: job_manager.go
+// Purpose: Complete job lifecycle and state transition management
 //
-// 設計理念:
-//   採用混合式設計，兼顧性能和一致性：
-//   1. jobs map - 統一的任務存儲，作為單一真實來源 (Single Source of Truth)
-//   2. 狀態索引 - pending queue、inFlight/completed/dead maps 提供快速查詢
-//   3. 兩者通過指針同步，確保狀態一致性
+// Design Philosophy:
+//   Hybrid design balancing performance and consistency:
+//   1. jobs map - Unified storage as Single Source of Truth
+//   2. State indexes - pending queue, inFlight/completed/dead maps for fast queries
+//   3. Pointer-based synchronization ensures consistency
 //
-// 任務狀態轉換 (State Machine):
-//   Pending (待處理)
+// Job State Machine:
+//   Pending (Waiting)
 //      ↓ PopPending() + MarkInFlight()
-//   InFlight (執行中)
-//      ↓ MarkCompleted() 或超時後 Requeue()
-//   Completed (已完成) / Dead (死信)
+//   InFlight (Executing)
+//      ↓ MarkCompleted() or timeout Requeue()
+//   Completed / Dead (Failed)
 //
-// 狀態轉換規則:
-//   - Pending → InFlight: 通過 PopPending() + MarkInFlight()
-//   - InFlight → Completed: 通過 MarkCompleted()
-//   - InFlight → Pending: 通過 Requeue() (失敗重試)
-//   - InFlight → Dead: 通過 MarkDead() (超過最大重試次數)
+// State Transitions:
+//   - Pending → InFlight: via PopPending() + MarkInFlight()
+//   - InFlight → Completed: via MarkCompleted()
+//   - InFlight → Pending: via Requeue() (retry on failure)
+//   - InFlight → Dead: via MarkDead() (max retries exceeded)
 //
-// 數據結構設計:
-//   jobs map[JobID]*Job - 主存儲，包含所有任務
-//   ├─ Job.Status 字段標識當前狀態
-//   └─ 通過狀態字段快速篩選不同狀態的任務
+// Data Structure:
+//   jobs map[JobID]*Job - Primary storage for all jobs
+//   ├─ Job.Status field identifies current state
+//   └─ Fast filtering by status field
 //
-//   輔助索引（提升性能）:
-//   - queue []JobID - pending 任務隊列，保證 FIFO
-//   - inFlight map - 執行中任務索引
-//   - completed map - 已完成任務索引
-//   - dead map - 死信任務索引
+//   Secondary indexes (performance boost):
+//   - queue []JobID - pending queue, FIFO order
+//   - inFlight map - executing jobs index
+//   - completed map - finished jobs index
+//   - dead map - failed jobs index
 //
-// 並發安全:
-//   - 使用 sync.RWMutex 保護所有數據結構
-//   - 讀操作使用 RLock，寫操作使用 Lock
-//   - 確保多 goroutine 並發訪問的安全性
+// Concurrency:
+//   - sync.RWMutex protects all data structures
+//   - RLock for reads, Lock for writes
+//   - Safe for multi-goroutine access
 //
-// 快照支持:
-//   - Snapshot() - 序列化當前所有任務狀態
-//   - Restore() - 從快照恢復任務狀態
-//   - 用於崩潰恢復和系統遷移
+// Snapshot Support:
+//   - Snapshot() - Serialize current job state
+//   - Restore() - Recover state from snapshot
+//   - Enables crash recovery and system migration
 //
-// 職責說明：
-//   1. 定義系統的統一狀態管理結構（單一 jobs map）
-//   2. 維護任務狀態轉換的完整性（Pending -> InFlight -> Completed/Dead）
-//   3. 提供任務生命週期管理方法
-//   4. 支援快照序列化與反序列化
+// Responsibilities:
+//   1. Unified state management (single jobs map)
+//   2. State transition integrity (Pending -> InFlight -> Completed/Dead)
+//   3. Job lifecycle management
+//   4. Snapshot serialization/deserialization
 //
 // ============================================================================
 
@@ -65,58 +65,55 @@ import (
 )
 
 // ============================================================================
-// 錯誤定義
+// Error Definitions
 // ============================================================================
 
 var (
-	// 任務 ID 重複錯誤
-	ErrDuplicateJob = errors.New("job already exists")
-	// 任務不在執行中狀態
-	ErrNotInFlight = errors.New("job not in flight")
-	// 任務不存在
-	ErrJobNotFound = errors.New("job not found")
+	ErrDuplicateJob = errors.New("job already exists") // Duplicate job ID error
+	ErrNotInFlight  = errors.New("job not in flight")  // Job not in executing state
+	ErrJobNotFound  = errors.New("job not found")      // Job does not exist
 )
 
-// 使用 pkg/types 中定義的狀態常數
+// Status constants defined in pkg/types
 
 // ============================================================================
-// 資料結構定義（簡化版本）
+// Data Structure Definitions
 // ============================================================================
 
-// 使用 pkg/types 中定義的領域模型
+// Domain models defined in pkg/types
 
-// JobManager 代表任務管理器，使用混合設計確保效率
+// JobManager manages job lifecycle using hybrid design for efficiency
 type JobManager struct {
 	mu        sync.RWMutex
-	jobs      map[types.JobID]*types.Job // 所有任務的統一儲存，透過 Status 欄位區分狀態
-	queue     []types.JobID              // 待處理佇列
-	inFlight  map[types.JobID]*types.Job // 執行中任務
-	completed map[types.JobID]*types.Job // 已完成任務
-	dead      map[types.JobID]*types.Job // 死信任務
+	jobs      map[types.JobID]*types.Job // Unified storage, status differentiated by Status field
+	queue     []types.JobID              // Pending queue
+	inFlight  map[types.JobID]*types.Job // Executing jobs
+	completed map[types.JobID]*types.Job // Completed jobs
+	dead      map[types.JobID]*types.Job // Dead letter jobs
 }
 
-// SnapShotData 快照資料，包含所有任務的完整狀態
+// SnapShotData contains complete job state for persistence
 type SnapShotData struct {
-	Jobs      map[types.JobID]*types.Job `json:"jobs"`           // 所有任務的完整資料
-	SchemaVer int                        `json:"schema_version"` // 版本號
+	Jobs      map[types.JobID]*types.Job `json:"jobs"`           // Complete job data
+	SchemaVer int                        `json:"schema_version"` // Schema version
 }
 
 // ============================================================================
-// 核心方法偽代碼
+// Core Methods
 // ============================================================================
 
-// NewJobManager 建立新的任務管理器實例
+// NewJobManager creates a new job manager instance
 //
-// 返回值：
-//   - *JobManager: 初始化完成的任務管理器
+// Returns:
+//   - *JobManager: Initialized job manager
 //
-// 使用範例：
+// Example:
 //
 //	jm := NewJobManager()
 //	job := Job{ID: "task-001", Payload: map[string]interface{}{"key": "value"}}
 //	err := jm.Enqueue(job)
 //
-// 併發安全：返回的實例是執行緒安全的
+// Concurrency: Returned instance is thread-safe
 func NewJobManager() *JobManager {
 	return &JobManager{
 		jobs:      make(map[types.JobID]*types.Job),
@@ -127,61 +124,58 @@ func NewJobManager() *JobManager {
 	}
 }
 
-// Enqueue 將新任務加入系統，設定為待處理狀態
+// Enqueue adds a new job to the system in pending state
 //
-// 參數說明：
-//   - job: 要加入的任務，必須包含唯一 ID
+// Parameters:
+//   - job: Job to add, must have unique ID
 //
-// 返回值：
-//   - error: 如果任務 ID 重複則回傳 ErrDuplicateJob
+// Returns:
+//   - error: ErrDuplicateJob if ID already exists
 //
-// 錯誤處理：
-//   - ErrDuplicateJob: 任務 ID 已存在於系統中
-//
-// 使用範例：
+// Example:
 //
 //	job := Job{ID: "task-001", Payload: map[string]interface{}{"key": "value"}}
 //	err := jm.Enqueue(job)
 //	if err != nil {
-//	    log.Printf("加入任務失敗: %v", err)
+//	    log.Printf("Failed to enqueue: %v", err)
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) Enqueue(job types.Job) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 
-	// 檢查任務 ID 是否已存在
+	// Check if job ID already exists
 	if _, exists := jm.jobs[job.ID]; exists {
 		return ErrDuplicateJob
 	}
 
-	// 設定任務狀態和時間戳
+	// Set job status and timestamps
 	now := time.Now().UnixMilli()
 	job.Status = types.StatusPending
 	job.CreatedAt = now
 	job.UpdatedAt = now
 
-	// 加入系統
+	// Add to system
 	jm.jobs[job.ID] = &job
 	jm.queue = append(jm.queue, job.ID)
 	return nil
 }
 
-// PopPending 取出一個待處理的任務，但不改變其狀態
+// PopPending retrieves a pending job without changing its state
 //
-// 返回值：
-//   - *Job: 第一個待處理任務的指標，如果沒有待處理任務則回傳 nil
+// Returns:
+//   - *Job: First pending job pointer, nil if queue is empty
 //
-// 使用範例：
+// Example:
 //
 //	job := state.PopPending()
 //	if job != nil {
-//	    log.Printf("取出任務: %s", job.ID)
-//	    // 處理任務後需要呼叫 MarkInFlight 來改變狀態
+//	    log.Printf("Popped job: %s", job.ID)
+//	    // Call MarkInFlight after processing to change state
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) PopPending() *types.Job {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
@@ -191,212 +185,212 @@ func (jm *JobManager) PopPending() *types.Job {
 	}
 
 	jobID := jm.queue[0]
-	jm.queue = jm.queue[1:] // 移除第一個
+	jm.queue = jm.queue[1:] // Remove first element
 
-	return jm.jobs[jobID] // O(1) 查找
+	return jm.jobs[jobID] // O(1) lookup
 }
 
-// MarkInFlight 將任務標記為執行中狀態，設定截止時間
+// MarkInFlight marks a job as in-flight status and sets the deadline
 //
-// 參數說明：
-//   - jobID: 要標記的任務 ID
-//   - deadline: 任務的截止時間
+// Parameters:
+//   - jobID: ID of the job to mark
+//   - deadline: Deadline for the job
 //
-// 返回值：
-//   - error: 如果任務不存在或狀態不正確則回傳錯誤
+// Returns:
+//   - error: Returns error if job does not exist or status is incorrect
 //
-// 錯誤處理：
-//   - ErrJobNotFound: 任務不存在於系統中
-//   - 自定義錯誤: 任務狀態不是 StatusPending
+// Error handling:
+//   - ErrJobNotFound: Job does not exist in the system
+//   - Custom error: Job status is not StatusPending
 //
-// 使用範例：
+// Example:
 //
 //	deadline := time.Now().Add(30 * time.Second)
 //	err := state.MarkInFlight("task-001", deadline)
 //	if err != nil {
-//	    log.Printf("標記執行中失敗: %v", err)
+//	    log.Printf("Failed to mark in-flight: %v", err)
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) MarkInFlight(jobID types.JobID, deadline time.Time) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 
-	// 檢查任務是否存在
+	// Check if job exists
 	job, exists := jm.jobs[jobID]
 	if !exists {
 		return ErrJobNotFound
 	}
 
-	// 檢查任務狀態是否為待處理
+	// Check if job status is pending
 	if job.Status != types.StatusPending {
 		return errors.New("job not in pending status")
 	}
 
-	// 更新任務狀態
+	// Update job status
 	deadlineMs := deadline.UnixMilli()
 	job.Status = types.StatusInFlight
 	job.Deadline = &deadlineMs
 	job.UpdatedAt = time.Now().UnixMilli()
 
-	// 加入 inFlight 集合
+	// Add to inFlight set
 	jm.inFlight[jobID] = job
 
 	return nil
 }
 
-// MarkCompleted 將任務標記為已完成狀態
+// MarkCompleted marks a job as completed status
 //
-// 參數說明：
-//   - jobID: 要標記完成的任務 ID
+// Parameters:
+//   - jobID: ID of the job to mark as completed
 //
-// 返回值：
-//   - error: 如果任務不存在或狀態不正確則回傳錯誤
+// Returns:
+//   - error: Returns error if job does not exist or status is incorrect
 //
-// 錯誤處理：
-//   - ErrJobNotFound: 任務不存在於系統中
-//   - ErrNotInFlight: 任務不在執行中狀態
+// Error handling:
+//   - ErrJobNotFound: Job does not exist in the system
+//   - ErrNotInFlight: Job is not in in-flight status
 //
-// 使用範例：
+// Example:
 //
 //	err := state.MarkCompleted("task-001")
 //	if err != nil {
-//	    log.Printf("標記完成失敗: %v", err)
+//	    log.Printf("Failed to mark completed: %v", err)
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) MarkCompleted(jobID types.JobID) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 
-	// 檢查任務是否存在
+	// Check if job exists
 	job, exists := jm.jobs[jobID]
 	if !exists {
 		return ErrJobNotFound
 	}
 
-	// 檢查任務狀態是否為執行中
+	// Check if job status is in-flight
 	if job.Status != types.StatusInFlight {
 		return ErrNotInFlight
 	}
 
-	// 更新任務狀態
+	// Update job status
 	job.Status = types.StatusCompleted
 	job.Deadline = nil
 	job.WorkerID = ""
 	job.UpdatedAt = time.Now().UnixMilli()
 
-	// 從 inFlight 移除，加入 completed
+	// Remove from inFlight, add to completed
 	delete(jm.inFlight, jobID)
 	jm.completed[jobID] = job
 
 	return nil
 }
 
-// Requeue 將執行中的任務重新排隊，增加重試次數
+// Requeue requeues an in-flight job and increments retry count
 //
-// 參數說明：
-//   - jobID: 要重新排隊的任務 ID
+// Parameters:
+//   - jobID: ID of the job to requeue
 //
-// 返回值：
-//   - error: 如果任務不存在或狀態不正確則回傳錯誤
+// Returns:
+//   - error: Returns error if job does not exist or status is incorrect
 //
-// 錯誤處理：
-//   - ErrJobNotFound: 任務不存在於系統中
-//   - ErrNotInFlight: 任務不在執行中狀態
+// Error handling:
+//   - ErrJobNotFound: Job does not exist in the system
+//   - ErrNotInFlight: Job is not in in-flight status
 //
-// 使用範例：
+// Example:
 //
 //	err := state.Requeue("task-001")
 //	if err != nil {
-//	    log.Printf("重新排隊失敗: %v", err)
+//	    log.Printf("Failed to requeue: %v", err)
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) Requeue(jobID types.JobID) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 
-	// 檢查任務是否存在
+	// Check if job exists
 	job, exists := jm.jobs[jobID]
 	if !exists {
 		return ErrJobNotFound
 	}
 
-	// 檢查任務狀態是否為執行中
+	// Check if job status is in-flight
 	if job.Status != types.StatusInFlight {
 		return ErrNotInFlight
 	}
 
-	// 增加重試次數並重新排隊
+	// Increment retry count and requeue
 	job.Attempt++
 	job.Status = types.StatusPending
 	job.Deadline = nil
 	job.WorkerID = ""
 	job.UpdatedAt = time.Now().UnixMilli()
 
-	// 從 inFlight 移除，重新加入 queue
+	// Remove from inFlight, add back to queue
 	delete(jm.inFlight, jobID)
 	jm.queue = append(jm.queue, jobID)
 
 	return nil
 }
 
-// MarkDead 將任務標記為死信狀態（失敗超過重試次數）
+// MarkDead marks a job as dead status (failed after exceeding retry limit)
 //
-// 參數說明：
-//   - jobID: 要標記為死信的任務 ID
+// Parameters:
+//   - jobID: ID of the job to mark as dead
 //
-// 返回值：
-//   - error: 如果任務不存在則回傳錯誤
+// Returns:
+//   - error: Returns error if job does not exist
 //
-// 使用範例：
+// Example:
 //
 //	err := jm.MarkDead("task-001")
 //	if err != nil {
-//	    log.Printf("標記死信失敗: %v", err)
+//	    log.Printf("Failed to mark dead: %v", err)
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) MarkDead(jobID types.JobID) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 
-	// 檢查任務是否存在
+	// Check if job exists
 	job, exists := jm.jobs[jobID]
 	if !exists {
 		return ErrJobNotFound
 	}
 
-	// 更新任務狀態
+	// Update job status
 	job.Status = types.StatusDead
 	job.Deadline = nil
 	job.WorkerID = ""
 	job.UpdatedAt = time.Now().UnixMilli()
 
-	// 從 inFlight 移除，加入 dead
+	// Remove from inFlight, add to dead
 	delete(jm.inFlight, jobID)
 	jm.dead[jobID] = job
 
 	return nil
 }
 
-// GetExpiredJobs 取得已過期的執行中任務
+// GetExpiredJobs retrieves expired in-flight jobs
 //
-// 參數說明：
-//   - now: 當前時間
+// Parameters:
+//   - now: Current time
 //
-// 返回值：
-//   - []JobID: 已過期的任務 ID 列表
+// Returns:
+//   - []JobID: List of expired job IDs
 //
-// 使用範例：
+// Example:
 //
 //	expiredJobs := jm.GetExpiredJobs(time.Now())
 //	for _, jobID := range expiredJobs {
-//	    log.Printf("任務 %s 已過期", jobID)
+//	    log.Printf("Job %s has expired", jobID)
 //	}
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) GetExpiredJobs(now time.Time) []types.JobID {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
@@ -413,14 +407,14 @@ func (jm *JobManager) GetExpiredJobs(now time.Time) []types.JobID {
 	return expired
 }
 
-// GetAllInFlightJobs 取得所有執行中的任務 ID
+// GetAllInFlightJobs retrieves all in-flight job IDs
 //
-// 返回值：
-//   - []types.JobID: 所有執行中任務的 ID 列表
+// Returns:
+//   - []types.JobID: List of all in-flight job IDs
 //
-// 用途：主要用於恢復時重新調度所有執行中的任務
+// Purpose: Mainly used for rescheduling all in-flight jobs during recovery
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) GetAllInFlightJobs() []types.JobID {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
@@ -433,18 +427,18 @@ func (jm *JobManager) GetAllInFlightJobs() []types.JobID {
 	return inFlightJobs
 }
 
-// Stats 取得各狀態任務的統計資訊
+// Stats retrieves statistics of jobs in each status
 //
-// 返回值：
-//   - map[string]int: 各狀態的任務數量統計
+// Returns:
+//   - map[string]int: Count of jobs in each status
 //
-// 使用範例：
+// Example:
 //
 //	stats := jm.Stats()
-//	log.Printf("待處理: %d, 執行中: %d, 已完成: %d, 死信: %d",
+//	log.Printf("Pending: %d, In-flight: %d, Completed: %d, Dead: %d",
 //	    stats["pending"], stats["in_flight"], stats["completed"], stats["dead"])
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) Stats() map[string]int {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
@@ -458,42 +452,42 @@ func (jm *JobManager) Stats() map[string]int {
 }
 
 // ============================================================================
-// 快照與恢復相關方法
+// Snapshot and Restore Methods
 // ============================================================================
 
-// Restore 從快照恢復狀態
+// Restore restores state from snapshot
 //
-// 參數說明：
-//   - data: 快照資料
+// Parameters:
+//   - data: Snapshot data
 //
-// 返回值：
-//   - error: 恢復失敗時的錯誤
+// Returns:
+//   - error: Error when restore fails
 //
-// 使用範例：
+// Example:
 //
 //	data, _ := snapshot.Load()
 //	err := jm.Restore(data)
 //	if err != nil {
-//	    log.Printf("恢復失敗: %v", err)
+//	    log.Printf("Restore failed: %v", err)
 //	}
 //
-// 併發安全：使用互斥鎖保護
+// Concurrency: Protected by mutex
 func (jm *JobManager) Restore(data types.SnapshotData) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 
-	// 清空現有狀態
+	// Clear existing state
 	jm.jobs = make(map[types.JobID]*types.Job)
 	jm.queue = make([]types.JobID, 0)
 	jm.inFlight = make(map[types.JobID]*types.Job)
 	jm.completed = make(map[types.JobID]*types.Job)
 	jm.dead = make(map[types.JobID]*types.Job)
 
-	// 恢復所有任務
+	// Restore all jobs
 	for jobID, job := range data.Jobs {
 		jm.jobs[jobID] = job
 
-		// 根據狀態分類
+		// Categorize by status
 		switch job.Status {
 		case types.StatusPending:
 			jm.queue = append(jm.queue, jobID)
@@ -509,22 +503,22 @@ func (jm *JobManager) Restore(data types.SnapshotData) error {
 	return nil
 }
 
-// Snapshot 生成快照資料
+// Snapshot generates snapshot data
 //
-// 返回值：
-//   - types.SnapshotData: 當前狀態的快照
+// Returns:
+//   - types.SnapshotData: Snapshot of current state
 //
-// 使用範例：
+// Example:
 //
 //	data := jm.Snapshot()
 //	snapshot.Write(data)
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) Snapshot() types.SnapshotData {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
 
-	// 深拷貝所有任務
+	// Deep copy all jobs
 	jobsCopy := make(map[types.JobID]*types.Job, len(jm.jobs))
 	for id, job := range jm.jobs {
 		jobCopy := *job
@@ -538,18 +532,18 @@ func (jm *JobManager) Snapshot() types.SnapshotData {
 }
 
 // ============================================================================
-// 查詢方法
+// Query Methods
 // ============================================================================
 
-// IsCompleted 檢查任務是否已完成
+// IsCompleted checks if a job is completed
 //
-// 參數說明：
-//   - jobID: 任務 ID
+// Parameters:
+//   - jobID: Job ID
 //
-// 返回值：
-//   - bool: 是否已完成
+// Returns:
+//   - bool: Whether the job is completed
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) IsCompleted(jobID types.JobID) bool {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
@@ -557,15 +551,15 @@ func (jm *JobManager) IsCompleted(jobID types.JobID) bool {
 	return exists
 }
 
-// IsDead 檢查任務是否已死亡
+// IsDead checks if a job is dead
 //
-// 參數說明：
-//   - jobID: 任務 ID
+// Parameters:
+//   - jobID: Job ID
 //
-// 返回值：
-//   - bool: 是否已死亡
+// Returns:
+//   - bool: Whether the job is dead
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) IsDead(jobID types.JobID) bool {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
@@ -573,15 +567,15 @@ func (jm *JobManager) IsDead(jobID types.JobID) bool {
 	return exists
 }
 
-// GetJob 取得任務
+// GetJob retrieves a job
 //
-// 參數說明：
-//   - jobID: 任務 ID
+// Parameters:
+//   - jobID: Job ID
 //
-// 返回值：
-//   - *types.Job: 任務指標，如果不存在則回傳 nil
+// Returns:
+//   - *types.Job: Job pointer, returns nil if not exists
 //
-// 併發安全：使用讀鎖保護
+// Concurrency: Protected by read lock
 func (jm *JobManager) GetJob(jobID types.JobID) *types.Job {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
