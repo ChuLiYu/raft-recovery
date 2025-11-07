@@ -1,72 +1,72 @@
 // ============================================================================
-// Beaver-Raft 快照管理器 - 系統狀態持久化
+// Beaver-Raft Snapshot Manager - System State Persistence
 // ============================================================================
 //
 // Package: internal/snapshot
-// 文件: snapshot_manager.go
-// 功能: 定期保存系統完整狀態，實現快速崩潰恢復
+// File: snapshot_manager.go
+// Purpose: Periodic system state saves for fast crash recovery
 //
-// 設計目標:
-//   1. 快速恢復 - 從快照恢復比重放所有 WAL 日誌快得多
-//   2. 數據安全 - 使用原子性寫入防止快照損壞
-//   3. 版本兼容 - 支持 schema 版本演進
-//   4. 可讀性 - JSON 格式便於調試和手動檢查
+// Design Goals:
+//   1. Fast Recovery - Snapshot restore faster than replaying all WAL logs
+//   2. Data Safety - Atomic writes prevent snapshot corruption
+//   3. Version Compatibility - Schema version evolution support
+//   4. Readability - JSON format for debugging and manual inspection
 //
-// 快照策略:
-//   採用定期快照 + WAL 的混合方案：
+// Snapshot Strategy:
+//   Hybrid approach with periodic snapshots + WAL:
 //
-//   時間軸：
+//   Timeline:
 //   ├─ Snapshot 1 (T1)
 //   ├─ WAL entry 1
 //   ├─ WAL entry 2
 //   ├─ WAL entry 3
-//   ├─ Snapshot 2 (T2)  ← 最新快照
-//   ├─ WAL entry 4      ← 需要重放
-//   └─ WAL entry 5      ← 需要重放
+//   ├─ Snapshot 2 (T2)  ← Latest snapshot
+//   ├─ WAL entry 4      ← Needs replay
+//   └─ WAL entry 5      ← Needs replay
 //
-//   恢復流程：
-//   1. 加載最新快照（Snapshot 2）
-//   2. 重放快照後的 WAL（entry 4, 5）
-//   3. 總恢復時間 = 快照加載時間 + 少量 WAL 重放時間
+//   Recovery Process:
+//   1. Load latest snapshot (Snapshot 2)
+//   2. Replay WAL after snapshot (entries 4, 5)
+//   3. Total recovery time = snapshot load + minimal WAL replay
 //
-// 原子性寫入:
-//   為防止寫入過程中崩潰導致快照損壞，採用以下流程：
-//   1. 寫入臨時文件 snapshot.json.tmp
-//   2. 寫入完成後調用 os.Rename()
-//   3. os.Rename() 是原子操作（POSIX 保證）
-//   4. 確保快照文件要麼是完整的，要麼不存在
+// Atomic Writes:
+//   To prevent corruption from mid-write crashes:
+//   1. Write to temp file snapshot.json.tmp
+//   2. Call os.Rename() when complete
+//   3. os.Rename() is atomic (POSIX guarantee)
+//   4. Ensures snapshot is either complete or non-existent
 //
-// 數據格式:
-//   JSON 格式的快照包含：
+// Data Format:
+//   JSON snapshot contains:
 //   {
-//     "jobs": {              // 所有任務的完整狀態
+//     "jobs": {              // Complete job states
 //       "job-1": {...},
 //       "job-2": {...}
 //     },
-//     "schema_ver": 1,       // Schema 版本號
-//     "last_seq": 12345      // WAL 最後序列號
+//     "schema_ver": 1,       // Schema version
+//     "last_seq": 12345      // Last WAL sequence number
 //   }
 //
-// Schema 版本管理:
-//   - V1: 當前版本，包含基本任務信息
-//   - 未來版本: 可以添加新字段，保持向後兼容
-//   - 加載時檢查版本，不兼容則返回錯誤
+// Schema Versioning:
+//   - V1: Current version with basic job info
+//   - Future versions: Add new fields, maintain backward compatibility
+//   - Load-time version check, error if incompatible
 //
-// 錯誤處理:
-//   - ErrSnapshotNotFound: 首次啟動，沒有快照文件（正常情況）
-//   - ErrCorruptedSnapshot: JSON 解析失敗，快照損壞
-//   - ErrIncompatibleVersion: Schema 版本不兼容
+// Error Handling:
+//   - ErrSnapshotNotFound: First startup, no snapshot (normal)
+//   - ErrCorruptedSnapshot: JSON parse failure, corrupted
+//   - ErrIncompatibleVersion: Schema version mismatch
 //
-// 性能優化:
-//   - 使用 sync.Mutex 確保寫入原子性
-//   - JSON 縮排格式（便於調試，性能影響可接受）
-//   - 考慮未來使用壓縮減小文件大小
+// Performance:
+//   - sync.Mutex ensures write atomicity
+//   - Indented JSON (debugging friendly, acceptable overhead)
+//   - Future: Consider compression for size reduction
 //
-// 職責說明：
-//   1. 將系統完整狀態序列化為 JSON 快照檔
-//   2. 使用原子性寫入（temp file + rename）防止損壞
-//   3. 載入時驗證 schema 版本相容性
-//   4. 配合 WAL 實現快速恢復（< 3s 目標）
+// Responsibilities:
+//   1. Serialize system state to JSON snapshot files
+//   2. Atomic writes (temp file + rename) prevent corruption
+//   3. Validate schema version compatibility on load
+//   4. Enable fast recovery with WAL (< 3s target)
 //
 // ============================================================================
 
@@ -84,7 +84,7 @@ import (
 )
 
 // ============================================================================
-// 錯誤定義
+// Error Definitions
 // ============================================================================
 
 var (
@@ -94,66 +94,66 @@ var (
 )
 
 // ============================================================================
-// 資料結構定義
+// Data Structure Definitions
 // ============================================================================
 
-// Manager 快照管理器
+// Manager handles snapshot persistence
 type Manager struct {
-	path string     // 快照檔案路徑
-	mu   sync.Mutex // 保護檔案操作
+	path string     // Snapshot file path
+	mu   sync.Mutex // Protects file operations
 }
 
-// 使用 pkg/types.SnapshotData 結構（已在 pkg/types/types.go 定義）：
-//   - Jobs: map[JobID]*Job  // 所有任務的統一儲存
-//   - SchemaVer: int        // 版本號（目前為 1）
-//   - LastSeq: uint64       // WAL 最後序號
+// Uses pkg/types.SnapshotData structure (defined in pkg/types/types.go):
+//   - Jobs: map[JobID]*Job  // Unified job storage
+//   - SchemaVer: int        // Version number (currently 1)
+//   - LastSeq: uint64       // Last WAL sequence number
 
 // ============================================================================
-// 核心方法實作
+// Core Method Implementation
 // ============================================================================
 
-// NewManager 建立快照管理器實例
+// NewManager creates a snapshot manager instance
 func NewManager(path string) *Manager {
 	return &Manager{
 		path: path,
 	}
 }
 
-// Write 原子性寫入快照
+// Write atomically writes snapshot to disk
 //
-// 使用原子性寫入流程：
-// 1. 寫入臨時檔案（.tmp）
-// 2. 使用 os.Rename 原子性替換原始檔案
+// Atomic write process:
+// 1. Write to temp file (.tmp)
+// 2. Use os.Rename to atomically replace original
 //
-// 參數：
-//   - data: 快照資料（使用 pkg/types.SnapshotData）
+// Parameters:
+//   - data: Snapshot data (uses pkg/types.SnapshotData)
 //
-// 返回值：
-//   - error: 寫入失敗時的錯誤
+// Returns:
+//   - error: Error on write failure
 func (m *Manager) Write(data types.SnapshotData) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 設定版本號（目前為 1）
+	// Set version number (currently 1)
 	data.SchemaVer = 1
 
-	// 序列化為 JSON（帶縮排，方便人工閱讀與除錯）
+	// Serialize to JSON (indented for readability and debugging)
 	jsonBytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	// 原子性寫入流程
+	// Atomic write process
 	tmpPath := m.path + ".tmp"
 
-	// 1. 寫入臨時檔案
+	// 1. Write to temp file
 	if err := os.WriteFile(tmpPath, jsonBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write temp snapshot: %w", err)
 	}
 
-	// 2. 原子性重新命名（關鍵步驟）
+	// 2. Atomic rename (critical step)
 	if err := os.Rename(tmpPath, m.path); err != nil {
-		// 重新命名失敗，清理臨時檔案
+		// Rename failed, cleanup temp file
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename snapshot: %w", err)
 	}
@@ -161,27 +161,27 @@ func (m *Manager) Write(data types.SnapshotData) error {
 	return nil
 }
 
-// Load 載入快照
+// Load reads snapshot from disk
 //
-// 行為：
-//   - 如果檔案不存在，回傳空的 SnapshotData（首次啟動）
-//   - 驗證 schema 版本是否相容
-//   - 偵測損壞的快照檔案
+// Behavior:
+//   - Returns empty SnapshotData if file doesn't exist (first startup)
+//   - Validates schema version compatibility
+//   - Detects corrupted snapshot files
 //
-// 返回值：
-//   - types.SnapshotData: 快照資料
-//   - error: 載入失敗或版本不相容時的錯誤
+// Returns:
+//   - types.SnapshotData: Snapshot data
+//   - error: Error on load failure or version incompatibility
 func (m *Manager) Load() (types.SnapshotData, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var data types.SnapshotData
 
-	// 讀取檔案
+	// Read file
 	jsonBytes, err := os.ReadFile(m.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// 首次啟動，無快照，回傳空狀態
+			// First startup, no snapshot, return empty state
 			return types.SnapshotData{
 				Jobs:      make(map[types.JobID]*types.Job),
 				SchemaVer: 1,
@@ -191,17 +191,17 @@ func (m *Manager) Load() (types.SnapshotData, error) {
 		return data, fmt.Errorf("failed to read snapshot: %w", err)
 	}
 
-	// 反序列化
+	// Deserialize
 	if err := json.Unmarshal(jsonBytes, &data); err != nil {
 		return data, fmt.Errorf("%w: %v", ErrCorruptedSnapshot, err)
 	}
 
-	// 驗證版本
+	// Validate version
 	if data.SchemaVer != 1 {
 		return data, fmt.Errorf("%w: got %d, want 1", ErrIncompatibleVersion, data.SchemaVer)
 	}
 
-	// 確保 Jobs map 不為 nil
+	// Ensure Jobs map is not nil
 	if data.Jobs == nil {
 		data.Jobs = make(map[types.JobID]*types.Job)
 	}
@@ -209,47 +209,47 @@ func (m *Manager) Load() (types.SnapshotData, error) {
 	return data, nil
 }
 
-// Exists 檢查快照檔案是否存在
+// Exists checks if snapshot file exists
 func (m *Manager) Exists() bool {
 	_, err := os.Stat(m.path)
 	return err == nil
 }
 
-// GetPath 取得快照檔案路徑（用於測試與除錯）
+// GetPath returns snapshot file path (for testing and debugging)
 func (m *Manager) GetPath() string {
 	return m.path
 }
 
 // ============================================================================
-// ✅ 已完成的 TODO
+// ✅ Completed TODOs
 // ============================================================================
 
-// ✅ TODO 1: 實作 Write 與原子寫入邏輯（確保不損壞）
-// ✅ TODO 2: 實作 Load 與版本驗證（確保相容性）
-// ⏳ TODO 3: 加入壓縮支援（可選，Phase 1 可跳過）
+// ✅ TODO 1: Implement Write with atomic write logic (prevent corruption)
+// ✅ TODO 2: Implement Load with version validation (ensure compatibility)
+// ⏳ TODO 3: Add compression support (optional, skip in Phase 1)
 
 // ============================================================================
-// 進階功能（未來優化）
+// Advanced Features (Future Optimization)
 // ============================================================================
 
-// WriteWithBackup 寫入快照並保留舊版本備份
+// WriteWithBackup writes snapshot and keeps old version backups
 //
-// 用於更安全的快照管理，保留最近幾個版本
+// For safer snapshot management, retains recent versions
 func (m *Manager) WriteWithBackup(data types.SnapshotData, keepBackups int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 如果存在舊快照，先備份
+	// If old snapshot exists, backup first
 	if m.Exists() {
 		backupPath := fmt.Sprintf("%s.%s", m.path, time.Now().Format("20060102_150405"))
 		if err := os.Rename(m.path, backupPath); err != nil {
 			return fmt.Errorf("failed to backup old snapshot: %w", err)
 		}
 
-		// TODO: 清理過舊的備份檔案（保留最近 keepBackups 個）
+		// TODO: Cleanup old backups (keep recent keepBackups count)
 	}
 
-	// 解鎖後調用原始 Write 方法
+	// Unlock and call original Write method
 	m.mu.Unlock()
 	err := m.Write(data)
 	m.mu.Lock()
@@ -258,11 +258,11 @@ func (m *Manager) WriteWithBackup(data types.SnapshotData, keepBackups int) erro
 }
 
 // ============================================================================
-// 進階功能（Phase 1 可選）
+// Advanced Features (Optional in Phase 1)
 // ============================================================================
 
 /*
-壓縮支援（未來實作）:
+Compression Support (Future Implementation):
 
   import "compress/gzip"
 
@@ -275,5 +275,5 @@ func (m *Manager) WriteWithBackup(data types.SnapshotData, keepBackups int) erro
     gzipReader, _ := gzip.NewReader(file)
     json.NewDecoder(gzipReader).Decode(&data)
 
-  效益: 大型佇列（10萬任務）時可節省 70% 磁碟空間
+  Benefit: Save 70% disk space for large queues (100k jobs)
 */

@@ -1,8 +1,8 @@
 package snapshot
 
 // ============================================================================
-// Snapshot Manager 測試檔案
-// 職責：驗證快照的原子性寫入、載入、版本驗證與錯誤處理
+// Snapshot Manager test file
+// Purpose: verify atomic snapshot writes, loading, version checks with error handling
 // ============================================================================
 
 import (
@@ -19,23 +19,23 @@ import (
 )
 
 // ============================================================================
-// 基礎功能測試
+// Basic functionality tests
 // ============================================================================
 
-// TestNewManager 測試建立管理器
+// TestNewManager tests creating a manager
 func TestNewManager(t *testing.T) {
 	manager := NewManager("test_snapshot.json")
 	assert.NotNil(t, manager)
 	assert.Equal(t, "test_snapshot.json", manager.GetPath())
 }
 
-// TestWriteAndLoad 測試寫入與載入快照
+// TestWriteAndLoad tests writing and loading snapshot
 func TestWriteAndLoad(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 建立測試資料
+	// create test data
 	originalData := types.SnapshotData{
 		Jobs: map[types.JobID]*types.Job{
 			"job-001": {
@@ -61,20 +61,20 @@ func TestWriteAndLoad(t *testing.T) {
 		LastSeq:   100,
 	}
 
-	// 寫入快照
+	// write snapshot
 	err := manager.Write(originalData)
 	require.NoError(t, err)
 
-	// 載入快照
+	// load snapshot
 	loadedData, err := manager.Load()
 	require.NoError(t, err)
 
-	// 驗證內容一致
+	// verify contents match
 	assert.Equal(t, originalData.SchemaVer, loadedData.SchemaVer)
 	assert.Equal(t, originalData.LastSeq, loadedData.LastSeq)
 	assert.Equal(t, len(originalData.Jobs), len(loadedData.Jobs))
 
-	// 驗證每個任務
+	// verify each job
 	for jobID, originalJob := range originalData.Jobs {
 		loadedJob, exists := loadedData.Jobs[jobID]
 		require.True(t, exists, "Job %s should exist", jobID)
@@ -84,13 +84,13 @@ func TestWriteAndLoad(t *testing.T) {
 	}
 }
 
-// TestAtomicWrite 測試原子性寫入（關鍵測試）
+// TestAtomicWrite tests atomic write (critical test)
 func TestAtomicWrite(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 建立初始快照
+	// create initial snapshot
 	initialData := types.SnapshotData{
 		Jobs: map[types.JobID]*types.Job{
 			"job-old": {
@@ -105,11 +105,11 @@ func TestAtomicWrite(t *testing.T) {
 	err := manager.Write(initialData)
 	require.NoError(t, err)
 
-	// 並發測試：在寫入新快照時同時讀取
+	// Concurrent test: read while writing a new snapshot
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Goroutine 1: 寫入新快照
+	// Goroutine 1: write new snapshot
 	go func() {
 		defer wg.Done()
 		newData := types.SnapshotData{
@@ -127,11 +127,11 @@ func TestAtomicWrite(t *testing.T) {
 		assert.NoError(t, err)
 	}()
 
-	// Goroutine 2: 讀取快照
+	// Goroutine 2: read snapshot
 	var loadedData types.SnapshotData
 	go func() {
 		defer wg.Done()
-		time.Sleep(5 * time.Millisecond) // 稍微延遲，增加並發機會
+		time.Sleep(5 * time.Millisecond) // small delay to increase concurrency chance
 		data, err := manager.Load()
 		assert.NoError(t, err)
 		loadedData = data
@@ -139,26 +139,26 @@ func TestAtomicWrite(t *testing.T) {
 
 	wg.Wait()
 
-	// 驗證：應該讀到完整的快照（舊的或新的），不會是半成品
+	// verify: should read a complete snapshot (old or new), never a partial write
 	assert.True(t, loadedData.LastSeq == 50 || loadedData.LastSeq == 100,
 		"Should load either old (50) or new (100) snapshot, got %d", loadedData.LastSeq)
 
-	// 驗證 .tmp 檔案應該不存在
+	// verify .tmp file should not exist
 	tmpPath := snapshotPath + ".tmp"
 	_, err = os.Stat(tmpPath)
 	assert.True(t, os.IsNotExist(err), "Temp file should not exist after write")
 }
 
-// TestExists 測試檔案存在性檢查
+// TestExists tests file existence check
 func TestExists(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 初始不存在
+	// initially doesn't exist
 	assert.False(t, manager.Exists())
 
-	// 寫入後存在
+	// exists after write
 	data := types.SnapshotData{
 		Jobs:      make(map[types.JobID]*types.Job),
 		SchemaVer: 1,
@@ -170,16 +170,16 @@ func TestExists(t *testing.T) {
 }
 
 // ============================================================================
-// 錯誤處理測試
+// Error handling tests
 // ============================================================================
 
-// TestFirstBoot 測試首次啟動（無快照）
+// TestFirstBoot tests first boot (no snapshot)
 func TestFirstBoot(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "non_existent_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 載入不存在的快照應該回傳空狀態，不是錯誤
+	// Loading a non-existent snapshot should return empty state, not error
 	loadedData, err := manager.Load()
 	require.NoError(t, err)
 	assert.Equal(t, 1, loadedData.SchemaVer)
@@ -188,16 +188,16 @@ func TestFirstBoot(t *testing.T) {
 	assert.Equal(t, 0, len(loadedData.Jobs))
 }
 
-// TestVersionMismatch 測試版本不相容
+// TestVersionMismatch tests incompatible version
 func TestVersionMismatch(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 手動建立版本號為 2 的快照
+	// Manually create a snapshot with version 2 (incompatible)
 	invalidData := types.SnapshotData{
 		Jobs:      make(map[types.JobID]*types.Job),
-		SchemaVer: 2, // 不相容的版本
+		SchemaVer: 2, // incompatible version
 		LastSeq:   0,
 	}
 	jsonBytes, err := json.MarshalIndent(invalidData, "", "  ")
@@ -205,38 +205,38 @@ func TestVersionMismatch(t *testing.T) {
 	err = os.WriteFile(snapshotPath, jsonBytes, 0644)
 	require.NoError(t, err)
 
-	// 載入應該回傳版本不相容錯誤
+	// Loading should return incompatible version error
 	_, err = manager.Load()
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrIncompatibleVersion)
 }
 
-// TestCorrupted 測試損壞的快照
+// TestCorrupted tests corrupted snapshot handling
 func TestCorrupted(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 寫入無效的 JSON（半截斷）
+	// Write invalid JSON (truncated)
 	corruptedJSON := `{"jobs": {"job-001": {"id": "job-001", "status": "pending"`
 	err := os.WriteFile(snapshotPath, []byte(corruptedJSON), 0644)
 	require.NoError(t, err)
 
-	// 載入應該回傳損壞錯誤
+	// Loading should return corrupted snapshot error
 	_, err = manager.Load()
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrCorruptedSnapshot)
 }
 
-// TestWriteFailure 測試寫入失敗（唯讀目錄）
+// TestWriteFailure tests write failure (read-only directory)
 func TestWriteFailure(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// 建立唯讀目錄
+	// create read-only directory
 	readOnlyDir := filepath.Join(tempDir, "readonly")
 	err := os.Mkdir(readOnlyDir, 0444)
 	require.NoError(t, err)
-	defer os.Chmod(readOnlyDir, 0755) // 測試結束後恢復權限
+	defer os.Chmod(readOnlyDir, 0755) // restore permissions after test
 
 	snapshotPath := filepath.Join(readOnlyDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
@@ -247,22 +247,22 @@ func TestWriteFailure(t *testing.T) {
 		LastSeq:   0,
 	}
 
-	// 寫入應該失敗
+	// write should fail
 	err = manager.Write(data)
 	assert.Error(t, err)
 }
 
 // ============================================================================
-// 進階功能測試
+// Advanced functionality tests
 // ============================================================================
 
-// TestWriteWithBackup 測試帶備份的寫入
+// TestWriteWithBackup tests write with backup
 func TestWriteWithBackup(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 寫入初始快照
+	// write initial snapshot
 	initialData := types.SnapshotData{
 		Jobs: map[types.JobID]*types.Job{
 			"job-001": {
@@ -276,7 +276,7 @@ func TestWriteWithBackup(t *testing.T) {
 	err := manager.Write(initialData)
 	require.NoError(t, err)
 
-	// 使用備份模式寫入新快照
+	// write new snapshot with backup mode
 	newData := types.SnapshotData{
 		Jobs: map[types.JobID]*types.Job{
 			"job-002": {
@@ -290,12 +290,12 @@ func TestWriteWithBackup(t *testing.T) {
 	err = manager.WriteWithBackup(newData, 3)
 	require.NoError(t, err)
 
-	// 驗證新快照存在
+	// verify new snapshot exists
 	loadedData, err := manager.Load()
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), loadedData.LastSeq)
 
-	// 驗證備份檔案存在
+	// verify backup file exists
 	files, err := os.ReadDir(tempDir)
 	require.NoError(t, err)
 
@@ -309,13 +309,13 @@ func TestWriteWithBackup(t *testing.T) {
 	assert.True(t, backupFound, "Backup file should exist")
 }
 
-// TestLargeSnapshot 測試大型快照的寫入與載入
+// TestLargeSnapshot tests writing and loading a large snapshot
 func TestLargeSnapshot(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 建立包含 1000 個任務的大型快照
+	// create a large snapshot containing 1000 jobs
 	largeData := types.SnapshotData{
 		Jobs:      make(map[types.JobID]*types.Job),
 		SchemaVer: 1,
@@ -332,34 +332,34 @@ func TestLargeSnapshot(t *testing.T) {
 		}
 	}
 
-	// 寫入大型快照
+	// write large snapshot
 	start := time.Now()
 	err := manager.Write(largeData)
 	require.NoError(t, err)
 	writeDuration := time.Since(start)
 	t.Logf("Write duration for 1000 jobs: %v", writeDuration)
 
-	// 載入大型快照
+	// load large snapshot
 	start = time.Now()
 	loadedData, err := manager.Load()
 	require.NoError(t, err)
 	loadDuration := time.Since(start)
 	t.Logf("Load duration for 1000 jobs: %v", loadDuration)
 
-	// 驗證資料完整性
+	// verify data integrity
 	assert.Equal(t, len(largeData.Jobs), len(loadedData.Jobs))
 	assert.Equal(t, largeData.LastSeq, loadedData.LastSeq)
 
-	// 驗證效能（應該在合理時間內完成）
+	// verify performance (should complete within a reasonable time)
 	assert.Less(t, writeDuration, 1*time.Second, "Write should complete in < 1s")
 	assert.Less(t, loadDuration, 1*time.Second, "Load should complete in < 1s")
 }
 
 // ============================================================================
-// 並發安全測試
+// Concurrency safety tests
 // ============================================================================
 
-// TestConcurrentWrites 測試並發寫入
+// TestConcurrentWrites tests concurrent writes
 func TestConcurrentWrites(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
@@ -369,7 +369,7 @@ func TestConcurrentWrites(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	// 並發寫入
+	// concurrent writes
 	for i := 0; i < numGoroutines; i++ {
 		go func(index int) {
 			defer wg.Done()
@@ -390,20 +390,20 @@ func TestConcurrentWrites(t *testing.T) {
 
 	wg.Wait()
 
-	// 驗證最終快照是有效的
+	// verify final snapshot is valid
 	loadedData, err := manager.Load()
 	require.NoError(t, err)
 	assert.Equal(t, 1, loadedData.SchemaVer)
 	assert.NotNil(t, loadedData.Jobs)
 }
 
-// TestConcurrentReads 測試並發讀取
+// TestConcurrentReads tests concurrent reads
 func TestConcurrentReads(t *testing.T) {
 	tempDir := t.TempDir()
 	snapshotPath := filepath.Join(tempDir, "test_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 先寫入一個快照
+	// write a snapshot first
 	data := types.SnapshotData{
 		Jobs: map[types.JobID]*types.Job{
 			"job-001": {
@@ -417,7 +417,7 @@ func TestConcurrentReads(t *testing.T) {
 	err := manager.Write(data)
 	require.NoError(t, err)
 
-	// 並發讀取
+	// concurrent reads
 	numGoroutines := 20
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
@@ -436,10 +436,10 @@ func TestConcurrentReads(t *testing.T) {
 }
 
 // ============================================================================
-// Benchmark 測試
+// Benchmark tests
 // ============================================================================
 
-// BenchmarkWrite 測試寫入效能
+// BenchmarkWrite tests write performance
 func BenchmarkWrite(b *testing.B) {
 	tempDir := b.TempDir()
 	snapshotPath := filepath.Join(tempDir, "benchmark_snapshot.json")
@@ -463,13 +463,13 @@ func BenchmarkWrite(b *testing.B) {
 	}
 }
 
-// BenchmarkLoad 測試載入效能
+// BenchmarkLoad tests load performance
 func BenchmarkLoad(b *testing.B) {
 	tempDir := b.TempDir()
 	snapshotPath := filepath.Join(tempDir, "benchmark_snapshot.json")
 	manager := NewManager(snapshotPath)
 
-	// 先寫入快照
+	// write a snapshot first
 	data := types.SnapshotData{
 		Jobs: map[types.JobID]*types.Job{
 			"job-001": {
