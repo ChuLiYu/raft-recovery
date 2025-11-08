@@ -1,44 +1,44 @@
 // ============================================================================
-// Beaver-Raft CLI - 命令行界面
+// Beaver-Raft CLI - Command Line Interface
 // ============================================================================
 //
 // Package: internal/cli
-// 文件: cli.go
-// 功能: 提供用戶友好的命令行界面，基於 Cobra 框架
+// File: cli.go
+// Purpose: Provides user-friendly command line interface based on Cobra framework
 //
-// 命令結構:
-//   beaver-raft                    # 根命令
-//   ├── run                        # 啟動隊列系統
-//   │   └── --config, -c          # 指定配置文件
-//   ├── enqueue                    # 提交任務
-//   │   └── --file, -f            # 指定任務 JSON 文件
-//   ├── status                     # 查看系統狀態
-//   ├── --version                  # 顯示版本信息
-//   └── --help                     # 顯示幫助信息
+// Command Structure:
+//   beaver-raft                    # Root command
+//   ├── run                        # Start queue system
+//   │   └── --config, -c          # Specify config file
+//   ├── enqueue                    # Submit jobs
+//   │   └── --file, -f            # Specify job JSON file
+//   ├── status                     # View system status
+//   ├── --version                  # Display version information
+//   └── --help                     # Display help information
 //
-// 配置管理:
-//   使用 YAML 格式配置文件（默認：configs/default.yaml）
-//   配置項包括：
-//   - worker: Worker 數量和超時設置
-//   - wal: WAL 日誌配置
-//   - snapshot: 快照策略配置
-//   - metrics: Prometheus 監控配置
+// Configuration Management:
+//   Uses YAML format config file (default: configs/default.yaml)
+//   Configuration items include:
+//   - worker: Worker count and timeout settings
+//   - wal: WAL log configuration
+//   - snapshot: Snapshot strategy configuration
+//   - metrics: Prometheus monitoring configuration
 //
-// run 命令:
-//   啟動完整的隊列系統，包括：
-//   1. 加載配置文件
-//   2. 創建並啟動 Controller
-//   3. 啟動 Metrics HTTP 服務器（如果啟用）
-//   4. 監聽系統信號（SIGINT, SIGTERM）
-//   5. 優雅關閉系統
+// run Command:
+//   Starts complete queue system, including:
+//   1. Load config file
+//   2. Create and start Controller
+//   3. Start Metrics HTTP server (if enabled)
+//   4. Listen for system signals (SIGINT, SIGTERM)
+//   5. Gracefully shutdown system
 //
-//   示例：
+//   Examples:
 //     ./beaver-raft run
 //     ./beaver-raft run -c custom-config.yaml
 //
-// enqueue 命令:
-//   從 JSON 文件批量提交任務
-//   JSON 格式：
+// enqueue Command:
+//   Batch submit jobs from JSON file
+//   JSON format:
 //   [
 //     {
 //       "id": "job-1",
@@ -47,39 +47,39 @@
 //     }
 //   ]
 //
-//   示例：
+//   Examples:
 //     ./beaver-raft enqueue -f jobs.json
 //
-// status 命令:
-//   顯示系統運行狀態：
-//   - 配置文件路徑
-//   - WAL/Snapshot 狀態
-//   - Worker 狀態
+// status Command:
+//   Display system running status:
+//   - Config file path
+//   - WAL/Snapshot status
+//   - Worker status
 //
-//   示例：
+//   Examples:
 //     ./beaver-raft status
 //
-// 信號處理:
-//   run 命令會捕獲以下信號並優雅關閉：
-//   - SIGINT (Ctrl+C): 用戶中斷
-//   - SIGTERM: 系統終止請求
+// Signal Handling:
+//   run command captures following signals and gracefully shuts down:
+//   - SIGINT (Ctrl+C): User interrupt
+//   - SIGTERM: System terminate request
 //
-//   優雅關閉流程：
-//   1. 停止接受新任務
-//   2. 等待當前任務完成
-//   3. 創建最終快照
-//   4. 關閉所有資源
+//   Graceful shutdown flow:
+//   1. Stop accepting new jobs
+//   2. Wait for current jobs to complete
+//   3. Create final snapshot
+//   4. Close all resources
 //
-// Metrics 服務:
-//   如果配置中啟用，會在獨立 goroutine 中啟動 HTTP 服務：
-//   - 默認端口：9090
-//   - 路徑：/metrics
-//   - 格式：Prometheus 格式
+// Metrics Service:
+//   If enabled in config, starts HTTP service in separate goroutine:
+//   - Default port: 9090
+//   - Path: /metrics
+//   - Format: Prometheus format
 //
-// 錯誤處理:
-//   - 配置加載失敗：返回詳細錯誤信息
-//   - Controller 啟動失敗：清理資源並返回
-//   - 任務提交失敗：顯示錯誤但不中斷系統
+// Error Handling:
+//   - Config load failed: Return detailed error information
+//   - Controller start failed: Clean up resources and return
+//   - Job submission failed: Display error but don't interrupt system
 //
 // ============================================================================
 
@@ -102,8 +102,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config 表示系統的完整配置結構
-// 通過 YAML 標籤映射配置文件字段
+// Config represents the complete system configuration structure
+// Maps config file fields through YAML tags
 type Config struct {
 	Worker struct {
 		WorkerCount int           `yaml:"worker_count"`

@@ -17,7 +17,7 @@ func TestBuildCLI(t *testing.T) {
 	assert.Equal(t, "beaver-raft", cmd.Use, "Root command should be 'beaver-raft'")
 	assert.Equal(t, "1.0.0", cmd.Version, "Version should be 1.0.0")
 
-	// 檢查子命令
+	// Check subcommands
 	commands := cmd.Commands()
 	assert.Len(t, commands, 3, "Should have 3 subcommands")
 
@@ -30,7 +30,7 @@ func TestBuildCLI(t *testing.T) {
 	assert.True(t, commandNames["enqueue"], "Should have 'enqueue' command")
 	assert.True(t, commandNames["status"], "Should have 'status' command")
 
-	// 檢查持久化標誌
+	// Check persistent flags
 	configFlag := cmd.PersistentFlags().Lookup("config")
 	assert.NotNil(t, configFlag, "Should have --config flag")
 	assert.Equal(t, "configs/default.yaml", configFlag.DefValue, "Default config path should be configs/default.yaml")
@@ -51,12 +51,12 @@ func TestBuildEnqueueCommand(t *testing.T) {
 	assert.NotNil(t, cmd, "buildEnqueueCommand should return a non-nil command")
 	assert.Equal(t, "enqueue", cmd.Use, "Command should be 'enqueue'")
 
-	// 檢查 --file 標誌
+	// Check --file flag
 	fileFlag := cmd.Flags().Lookup("file")
 	assert.NotNil(t, fileFlag, "Should have --file flag")
 	assert.Equal(t, "f", fileFlag.Shorthand, "Should have -f shorthand")
 
-	// 檢查 RunE 函數（不執行，只檢查存在）
+	// Check RunE function (do not execute, just check existence)
 	assert.NotNil(t, cmd.RunE, "RunE function should be set")
 }
 
@@ -70,7 +70,7 @@ func TestBuildStatusCommand(t *testing.T) {
 }
 
 func TestLoadConfig_ValidYAML(t *testing.T) {
-	// 創建臨時配置文件
+	// Create temporary config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test_config.yaml")
 
@@ -99,28 +99,28 @@ metrics:
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	require.NoError(t, err, "Failed to write test config file")
 
-	// 加載配置
+	// Load config
 	cfg, err := loadConfig(configPath)
 	require.NoError(t, err, "loadConfig should not return an error")
 	require.NotNil(t, cfg, "Config should not be nil")
 
-	// 驗證 Worker 配置
+	// verify Worker config
 	assert.Equal(t, 4, cfg.Worker.WorkerCount, "Worker count should be 4")
 	assert.Equal(t, 5*time.Second, cfg.Worker.TaskTimeout, "Task timeout should be 5s")
 
-	// 驗證 WAL 配置
+	// verify WAL config
 	assert.Equal(t, "./test_wal", cfg.WAL.Dir, "WAL dir should be ./test_wal")
 	assert.Equal(t, int64(1048576), cfg.WAL.MaxSegmentSize, "Max segment size should be 1048576")
 	assert.Equal(t, 5, cfg.WAL.SyncInterval, "Sync interval should be 5")
 	assert.Equal(t, 3600, cfg.WAL.RetentionSeconds, "Retention seconds should be 3600")
 	assert.Equal(t, 50, cfg.WAL.BufferSize, "Buffer size should be 50")
 
-	// 驗證 Snapshot 配置
+	// verify Snapshot config
 	assert.Equal(t, "./test_snapshot", cfg.Snapshot.Dir, "Snapshot dir should be ./test_snapshot")
 	assert.Equal(t, 15, cfg.Snapshot.IntervalSeconds, "Interval seconds should be 15")
 	assert.Equal(t, 3, cfg.Snapshot.RetentionCount, "Retention count should be 3")
 
-	// 驗證 Metrics 配置
+	// verify Metrics config
 	assert.True(t, cfg.Metrics.Enabled, "Metrics should be enabled")
 	assert.Equal(t, 8080, cfg.Metrics.Port, "Metrics port should be 8080")
 }
@@ -134,7 +134,7 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 }
 
 func TestLoadConfig_InvalidYAML(t *testing.T) {
-	// 創建包含無效 YAML 的臨時文件
+	// Create a temporary file containing invalid YAML
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "invalid.yaml")
 
@@ -162,7 +162,7 @@ func TestLoadConfig_EmptyFile(t *testing.T) {
 	err := os.WriteFile(configPath, []byte(""), 0644)
 	require.NoError(t, err, "Failed to write empty file")
 
-	// 空文件應該能解析，但會有零值
+	// Empty file should parse, but fields will have zero values
 	cfg, err := loadConfig(configPath)
 	assert.NoError(t, err, "Empty YAML file should parse without error")
 	assert.NotNil(t, cfg, "Config should not be nil for empty file")
@@ -173,7 +173,7 @@ func TestLoadConfig_PartialConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "partial.yaml")
 
-	// 只包含部分配置
+	// Only partial config
 	partialConfig := `
 worker:
   worker_count: 2
@@ -211,16 +211,16 @@ func TestEnqueueJobs_InvalidJSON(t *testing.T) {
 }
 
 func TestShowStatus(t *testing.T) {
-	// showStatus 只是打印輸出，應該不會返回錯誤
+	// showStatus only prints output and should not return an error
 	err := showStatus()
 	assert.NoError(t, err, "showStatus should not return an error")
 }
 
 func TestConfigStructure(t *testing.T) {
-	// 測試 Config 結構體是否正確定義
+	// ensure Config struct fields are correctly defined
 	cfg := Config{}
 
-	// 檢查嵌套結構是否可訪問
+	// check nested fields are accessible
 	cfg.Worker.WorkerCount = 10
 	cfg.Worker.TaskTimeout = 5 * time.Second
 	cfg.WAL.Dir = "/test"
