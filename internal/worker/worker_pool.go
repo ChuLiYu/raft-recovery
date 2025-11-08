@@ -1,19 +1,19 @@
 // ============================================================================
-// Beaver-Raft Worker Pool - 並發任務執行器
+// Beaver-Raft Worker Pool - Concurrent Task Executor
 // ============================================================================
 //
 // Package: internal/worker
-// 文件: worker_pool.go
-// 功能: 管理多個 Worker goroutine 的生命週期和任務分發
+// File: worker_pool.go
+// Function: Manages the lifecycle and task distribution of multiple Worker goroutines
 //
-// 設計模式:
-//   採用 Worker Pool 模式（工作池模式）：
-//   1. 固定數量的 Worker goroutine 持續運行
-//   2. 通過共享的任務 channel 分發任務
-//   3. 通過結果 channel 收集執行結果
-//   4. 避免頻繁創建和銷毀 goroutine 的開銷
+// Design Pattern:
+//   Adopts the Worker Pool pattern:
+//   1. Fixed number of Worker goroutines running continuously
+//   2. Distribute tasks through shared task channel
+//   3. Collect execution results through result channel
+//   4. Avoid overhead of frequently creating and destroying goroutines
 //
-// 架構組件:
+// Architecture Components:
 //   ┌─────────────┐
 //   │ Controller  │ --Submit()--> taskCh
 //   └─────────────┘
@@ -29,36 +29,36 @@
 //   │  └────────┘ │
 //   └─────────────┘
 //
-// 生命週期:
-//   1. NewPool() - 創建 Pool，初始化 channels
-//   2. Start(n) - 啟動 n 個 Worker goroutines
-//   3. Submit(task) - 提交任務到 taskCh
-//   4. GetResult() - 從 resultCh 讀取結果
-//   5. Stop() - 關閉 taskCh，等待所有 Worker 完成
+// Lifecycle:
+//   1. NewPool() - Create Pool, initialize channels
+//   2. Start(n) - Start n Worker goroutines
+//   3. Submit(task) - Submit task to taskCh
+//   4. GetResult() - Read result from resultCh
+//   5. Stop() - Close taskCh, wait for all Workers to complete
 //
-// 並發控制:
-//   - taskCh: 帶緩衝 channel，避免提交阻塞
-//   - resultCh: 帶緩衝 channel，避免結果處理阻塞
-//   - WaitGroup: 追蹤所有 Worker，確保優雅關閉
-//   - Mutex: 保護 started/stopped 狀態
+// Concurrency Control:
+//   - taskCh: Buffered channel, avoid submission blocking
+//   - resultCh: Buffered channel, avoid result processing blocking
+//   - WaitGroup: Track all Workers, ensure graceful shutdown
+//   - Mutex: Protect started/stopped state
 //
-// 錯誤處理:
-//   - ErrPoolNotStarted: Pool 未啟動時提交任務
-//   - ErrPoolClosed: Pool 已關閉時提交任務
-//   - 任務超時由 Worker 內部的 Context 處理
+// Error Handling:
+//   - ErrPoolNotStarted: Submit task when Pool is not started
+//   - ErrPoolClosed: Submit task when Pool is closed
+//   - Task timeout handled by Context inside Worker
 //
-// 優雅關閉:
-//   Stop() 流程：
-//   1. 關閉 taskCh，不再接受新任務
-//   2. Worker 處理完當前任務後退出
-//   3. WaitGroup.Wait() 等待所有 Worker 完成
-//   4. 標記 stopped = true
+// Graceful Shutdown:
+//   Stop() process:
+//   1. Close taskCh, no longer accept new tasks
+//   2. Workers exit after completing current task
+//   3. WaitGroup.Wait() wait for all Workers to complete
+//   4. Mark stopped = true
 //
-// 職責說明：
-//   1. 管理 N 個 Worker goroutine 的生命週期
-//   2. 接收 Controller 分派的任務，分發給可用 Worker
-//   3. 收集 Worker 執行結果，回傳給 Controller
-//   4. 優雅關閉（等待所有 Worker 完成）
+// Responsibilities:
+//   1. Manage lifecycle of N Worker goroutines
+//   2. Receive tasks dispatched by Controller, distribute to available Workers
+//   3. Collect Worker execution results, return to Controller
+//   4. Graceful shutdown (wait for all Workers to complete)
 //
 // ============================================================================
 
@@ -70,175 +70,175 @@ import (
 )
 
 // ============================================================================
-// 錯誤定義
+// Error Definitions
 // ============================================================================
 
 var (
-	// ErrPoolClosed 表示當前 Pool 已關閉，無法提交新任務
+	// ErrPoolClosed indicates that the current Pool is closed and cannot accept new tasks
 	ErrPoolClosed = errors.New("worker pool is closed")
-	// ErrPoolNotStarted 表示 Pool 尚未啟動，無法提交任務
+	// ErrPoolNotStarted indicates that the Pool has not been started yet and cannot accept tasks
 	ErrPoolNotStarted = errors.New("worker pool not started")
 )
 
 // ============================================================================
-// 資料結構定義
+// Data Structure Definitions
 // ============================================================================
 
-// Pool 代表 Worker 池，管理多個並發的 Worker
+// Pool represents the Worker pool, managing multiple concurrent Workers
 type Pool struct {
-	workers  []*Worker      // Worker 列表，存儲所有啟動的 Worker 實例
-	taskCh   chan Task      // 任務通道，用於分發任務給 Worker
-	resultCh chan Result    // 結果通道，用於收集 Worker 的執行結果
-	stopCh   chan struct{}  // 停止訊號，用於通知 Worker 停止工作
-	wg       sync.WaitGroup // 等待所有 Worker 完成的同步工具
-	started  bool           // 標誌 Pool 是否已啟動
-	stopped  bool           // 標誌 Pool 是否已停止
-	mu       sync.Mutex     // 保護 started 和 stopped 狀態的互斥鎖
+	workers  []*Worker      // Worker list, stores all started Worker instances
+	taskCh   chan Task      // Task channel, used to distribute tasks to Workers
+	resultCh chan Result    // Result channel, used to collect Worker execution results
+	stopCh   chan struct{}  // Stop signal, used to notify Workers to stop working
+	wg       sync.WaitGroup // Synchronization tool to wait for all Workers to complete
+	started  bool           // Flag indicating whether Pool has started
+	stopped  bool           // Flag indicating whether Pool has stopped
+	mu       sync.Mutex     // Mutex to protect started and stopped state
 }
 
 // ============================================================================
-// 核心方法實作
+// Core Method Implementation
 // ============================================================================
 
-// NewPool 建立新的 Worker Pool
-// 參數：
-//   - bufferSize: 任務和結果通道的緩衝大小
+// NewPool creates a new Worker Pool
+// Parameters:
+//   - bufferSize: Buffer size for task and result channels
 //
-// 返回值：
-//   - *Pool: Worker Pool 實例
+// Returns:
+//   - *Pool: Worker Pool instance
 func NewPool(bufferSize int) *Pool {
 	return &Pool{
-		workers:  make([]*Worker, 0),            // 初始化 Worker 列表為空切片
-		taskCh:   make(chan Task, bufferSize),   // 帶緩衝的任務通道
-		resultCh: make(chan Result, bufferSize), // 帶緩衝的結果通道
-		stopCh:   make(chan struct{}),           // 停止訊號通道
-		started:  false,                         // 初始狀態為未啟動
+		workers:  make([]*Worker, 0),            // Initialize Worker list as empty slice
+		taskCh:   make(chan Task, bufferSize),   // Buffered task channel
+		resultCh: make(chan Result, bufferSize), // Buffered result channel
+		stopCh:   make(chan struct{}),           // Stop signal channel
+		started:  false,                         // Initial state is not started
 	}
 }
 
-// Start 啟動指定數量的 Worker
-// 參數：
-//   - workerCount: 要啟動的 Worker 數量
+// Start starts the specified number of Workers
+// Parameters:
+//   - workerCount: Number of Workers to start
 //
-// 返回值：
-//   - error: 如果 Pool 已啟動則返回錯誤
+// Returns:
+//   - error: Returns error if Pool is already started
 func (p *Pool) Start(workerCount int) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.started {
-		return errors.New("pool already started") // 防止重複啟動
+		return errors.New("pool already started") // Prevent duplicate start
 	}
 
 	for i := 0; i < workerCount; i++ {
-		worker := newWorker(i, p.taskCh, p.resultCh) // 創建新的 Worker 實例
-		p.workers = append(p.workers, worker)        // 將 Worker 添加到列表中
+		worker := newWorker(i, p.taskCh, p.resultCh) // Create new Worker instance
+		p.workers = append(p.workers, worker)        // Add Worker to list
 
-		p.wg.Add(1) // 增加 WaitGroup 計數
+		p.wg.Add(1) // Increase WaitGroup count
 		go func(w *Worker) {
-			defer p.wg.Done() // 確保 Worker 完成後減少計數
-			w.Run()           // 啟動 Worker 的主循環
+			defer p.wg.Done() // Ensure count is decreased after Worker completes
+			w.Run()           // Start Worker's main loop
 		}(worker)
 	}
 
-	p.started = true // 標記 Pool 為已啟動
+	p.started = true // Mark Pool as started
 	return nil
 }
 
-// Submit 提交任務到 Worker Pool
+// Submit submits a task to the Worker Pool
 //
-// 參數：
-//   - task: 要執行的任務
+// Parameters:
+//   - task: Task to execute
 //
-// 返回值：
-//   - error: 如果 Pool 未啟動或已關閉則返回錯誤
+// Returns:
+//   - error: Returns error if Pool is not started or already closed
 //
 // ============================================================================
-// ⚠️  已知的良性 Race Condition 說明（記錄於 2025-10-31）
+// ⚠️  Known Benign Race Condition Documentation (Recorded on 2025-10-31)
 // ============================================================================
 //
-// 問題描述：
+// Problem Description:
 //
-//	Go race detector 會在此方法與 Stop() 方法之間檢測到 data race。
-//	具體來說，Submit() 中向 taskCh 發送數據時，Stop() 可能正在關閉 taskCh。
+//	Go race detector will detect a data race between this method and Stop() method.
+//	Specifically, when Submit() is sending data to taskCh, Stop() may be closing taskCh.
 //
-// Race Detector 報告位置：
-//   - Write: Pool.Stop() 中的 close(p.taskCh) [worker_pool.go:156]
-//   - Read:  Pool.Submit() 中的 taskCh <- task [worker_pool.go:115]
+// Race Detector Report Location:
+//   - Write: close(p.taskCh) in Pool.Stop() [worker_pool.go:156]
+//   - Read:  taskCh <- task in Pool.Submit() [worker_pool.go:115]
 //
-// 為什麼這是"良性"的（不會導致數據損壞）：
-//  1. 狀態保護：Submit() 通過 stopped 標誌和 mu 互斥鎖進行了檢查
-//  2. Channel 保護：使用 select + stopCh 雙重檢查機制
-//  3. 錯誤處理：即使發生競爭，Submit() 會安全返回 ErrPoolClosed
-//  4. 順序保證：Stop() 只在 Controller.Stop() 確認所有循環退出後才被調用
+// Why this is "benign" (won't cause data corruption):
+//  1. State protection: Submit() checks with stopped flag and mu mutex
+//  2. Channel protection: Uses select + stopCh double-check mechanism
+//  3. Error handling: Even if race occurs, Submit() safely returns ErrPoolClosed
+//  4. Order guarantee: Stop() is only called after Controller.Stop() confirms all loops have exited
 //
-// 時序分析（最壞情況）：
+// Timing analysis (worst case):
 //
-//	T1: dispatchLoop 調用 Submit()，通過 stopped 檢查 ✓
-//	T2: Submit() 釋放鎖，準備向 taskCh 發送
-//	T3: Stop() 設置 stopped=true，關閉 stopCh
-//	T4: Stop() 關閉 taskCh ← Race detector 檢測到這裡
-//	T5: Submit() 嘗試發送到 taskCh
-//	    - 如果 taskCh 已關閉 → panic: send on closed channel
-//	    - 但實際上 select 會先檢測到 stopCh 關閉 → 返回 ErrPoolClosed ✓
+//	T1: dispatchLoop calls Submit(), passes stopped check ✓
+//	T2: Submit() releases lock, prepares to send to taskCh
+//	T3: Stop() sets stopped=true, closes stopCh
+//	T4: Stop() closes taskCh ← Race detector detects here
+//	T5: Submit() attempts to send to taskCh
+//	    - If taskCh is closed → panic: send on closed channel
+//	    - But actually select will detect stopCh closure first → returns ErrPoolClosed ✓
 //
-// 為什麼不修復：
-//  1. 修復需要引入複雜的同步機制，可能影響性能
-//  2. 當前實現在實際運行中是安全的（有 stopCh 作為 fallback）
-//  3. 這個 race 只在極端時序下出現（測試中偶爾觸發）
-//  4. 即使觸發，也不會導致數據損壞或系統崩潰
+// Why not fix:
+//  1. Fix requires introducing complex synchronization mechanism, may affect performance
+//  2. Current implementation is safe in actual operation (has stopCh as fallback)
+//  3. This race only appears under extreme timing (occasionally triggered in tests)
+//  4. Even if triggered, won't cause data corruption or system crash
 //
-// 驗證方法：
-//   - 功能測試：go test ./internal/controller/ -v -count=100  ✓ 全部通過
-//   - Race 測試：go test -race ./internal/controller/          ⚠️  檢測到但無實際問題
+// Verification methods:
+//   - Functional test: go test ./internal/controller/ -v -count=100  ✓ All pass
+//   - Race test: go test -race ./internal/controller/          ⚠️  Detected but no actual problem
 //
-// 未來改進方向（如果需要）：
-//  1. 使用 context.Context 替代 stopCh 進行取消信號傳遞
-//  2. 在 Submit() 中持有鎖直到發送完成（但會降低並發性能）
-//  3. 使用 atomic 操作替代 mutex（更複雜但更細粒度）
+// Future improvement directions (if needed):
+//  1. Use context.Context instead of stopCh for cancellation signal propagation
+//  2. Hold lock in Submit() until send completes (but will reduce concurrent performance)
+//  3. Use atomic operations instead of mutex (more complex but finer granularity)
 //
-// 相關議題：
+// Related issues:
 //   - Go issue #8898: https://github.com/golang/go/issues/8898
-//   - 討論：向 closed channel 發送是 panic，但 select 可以安全檢測
+//   - Discussion: Sending to closed channel is panic, but select can detect safely
 //
 // ============================================================================
 func (p *Pool) Submit(task Task) error {
 	p.mu.Lock()
 	if !p.started {
 		p.mu.Unlock()
-		return ErrPoolNotStarted // Pool 尚未啟動
+		return ErrPoolNotStarted // Pool not started yet
 	}
 	if p.stopped {
 		p.mu.Unlock()
-		return ErrPoolClosed // Pool 已關閉
+		return ErrPoolClosed // Pool already closed
 	}
 
-	// 保存 channel 引用（避免在 select 中訪問可能被關閉的 channel）
+	// Save channel references (avoid accessing potentially closed channels in select)
 	taskCh := p.taskCh
 	stopCh := p.stopCh
 	p.mu.Unlock()
 
-	// 雙重檢查機制：
-	// 1. 首先嘗試發送到 taskCh
-	// 2. 如果 Stop() 已關閉 stopCh，則安全返回錯誤
-	// 注意：即使 taskCh 已關閉，select 會先檢測到 stopCh 的關閉
+	// Double-check mechanism:
+	// 1. First try to send to taskCh
+	// 2. If Stop() has closed stopCh, safely return error
+	// Note: Even if taskCh is closed, select will detect stopCh closure first
 	select {
-	case taskCh <- task: // 將任務發送到任務通道
+	case taskCh <- task: // Send task to task channel
 		return nil
-	case <-stopCh: // 如果 Pool 已停止，返回錯誤
+	case <-stopCh: // If Pool is stopped, return error
 		return ErrPoolClosed
 	}
 }
 
-// ReceiveResult 從結果通道接收執行結果
-// 返回值：
-//   - Result: 任務執行結果
-//   - error: 如果 Pool 已關閉則返回錯誤
+// ReceiveResult receives execution results from the result channel
+// Returns:
+//   - Result: Task execution result
+//   - error: Returns error if Pool is closed
 func (p *Pool) ReceiveResult() (Result, error) {
 	select {
 	case result, ok := <-p.resultCh:
 		if !ok {
-			// resultCh 已關閉
+			// resultCh is closed
 			return Result{}, ErrPoolClosed
 		}
 		return result, nil
@@ -247,63 +247,63 @@ func (p *Pool) ReceiveResult() (Result, error) {
 	}
 }
 
-// Stop 優雅地關閉 Worker Pool
-// 關閉流程：
-//  1. 設定 stopped 標誌
-//  2. 關閉 stopCh，通知所有 Worker 停止接收新任務
-//  3. 關閉 taskCh，結束 Worker 的 range 循環
-//  4. 等待所有 Worker 完成當前任務
-//  5. 關閉 resultCh
+// Stop gracefully shuts down the Worker Pool
+// Shutdown process:
+//  1. Set stopped flag
+//  2. Close stopCh, notify all Workers to stop receiving new tasks
+//  3. Close taskCh, end Worker's range loop
+//  4. Wait for all Workers to complete current tasks
+//  5. Close resultCh
 func (p *Pool) Stop() {
 	p.mu.Lock()
 	if !p.started || p.stopped {
 		p.mu.Unlock()
-		return // 如果未啟動或已停止，直接返回
+		return // If not started or already stopped, return directly
 	}
-	p.stopped = true // 標記 Pool 為已停止
+	p.stopped = true // Mark Pool as stopped
 	p.mu.Unlock()
 
-	close(p.stopCh) // 發送停止訊號
-	close(p.taskCh) // 停止接收新任務
+	close(p.stopCh) // Send stop signal
+	close(p.taskCh) // Stop accepting new tasks
 
-	p.wg.Wait() // 等待所有 Worker 完成
+	p.wg.Wait() // Wait for all Workers to complete
 
-	close(p.resultCh) // 關閉結果通道
+	close(p.resultCh) // Close result channel
 }
 
-// GetWorkerCount 返回當前 Worker 數量
+// GetWorkerCount returns the current number of Workers
 func (p *Pool) GetWorkerCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.workers) // 返回 Worker 列表的長度
+	return len(p.workers) // Return length of Worker list
 }
 
-// IsStarted 檢查 Pool 是否已啟動
+// IsStarted checks if the Pool has started
 func (p *Pool) IsStarted() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.started // 返回啟動狀態
+	return p.started // Return started state
 }
 
 // ============================================================================
-// ✅ 已完成的 TODO
+// ✅ Completed TODOs
 // ============================================================================
 
-// ✅ TODO 1: 實作 Worker.Run 與 execute（模擬工作）
-// ✅ TODO 2: 實作 Pool.Start/Stop 與 goroutine 管理
-// ⏳ TODO 3: 加入 Worker 健康檢查與異常恢復（Phase 2）
+// ✅ TODO 1: Implement Worker.Run and execute (simulate work)
+// ✅ TODO 2: Implement Pool.Start/Stop and goroutine management
+// ⏳ TODO 3: Add Worker health check and exception recovery (Phase 2)
 
 // ============================================================================
-// 進階功能（Phase 2）
+// Advanced Features (Phase 2)
 // ============================================================================
 
 /*
-Worker 健康檢查與異常恢復:
+Worker health check and exception recovery:
 
   Run():
     defer func() {
       if r := recover(); r != nil {
-        // 記錄 panic 並重新啟動 Worker
+        // Log panic and restart Worker
         log.Error("Worker panic", id, r)
       }
     }()
@@ -311,17 +311,17 @@ Worker 健康檢查與異常恢復:
     for task := range taskCh:
       ...
 
-動態調整 Worker 數量:
+Dynamic Worker count adjustment:
 
   Scale(newCount int):
     if newCount > current:
-      啟動更多 Worker
+      Start more Workers
     else:
-      訊號部分 Worker 退出
+      Signal some Workers to exit
 
-Worker 指標收集:
+Worker metrics collection:
 
-  - 每個 Worker 的執行任務數
-  - 平均執行時間
-  - 失敗率
+  - Number of tasks executed by each Worker
+  - Average execution time
+  - Failure rate
 */

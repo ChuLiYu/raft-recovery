@@ -1,8 +1,8 @@
 package worker
 
 // ============================================================================
-// Worker Pool 測試檔案
-// 職責：驗證並發執行、超時機制、優雅關閉
+// Worker Pool Test File
+// Purpose: Verify concurrent execution, timeout mechanism, graceful shutdown
 // ============================================================================
 
 import (
@@ -19,10 +19,10 @@ import (
 )
 
 // ============================================================================
-// 基礎功能測試
+// Basic Functionality Tests
 // ============================================================================
 
-// TestNewPool 測試建立 Worker Pool
+// TestNewPool tests creating Worker Pool
 func TestNewPool(t *testing.T) {
 	pool := NewPool(10)
 	assert.NotNil(t, pool)
@@ -30,30 +30,30 @@ func TestNewPool(t *testing.T) {
 	assert.False(t, pool.IsStarted())
 }
 
-// TestPoolStart 測試啟動 Worker Pool
+// TestPoolStart tests starting Worker Pool
 func TestPoolStart(t *testing.T) {
 	pool := NewPool(10)
 
-	// 啟動 8 個 Worker
+	// Start 8 Workers
 	err := pool.Start(8)
 	require.NoError(t, err)
 	assert.Equal(t, 8, pool.GetWorkerCount())
 	assert.True(t, pool.IsStarted())
 
-	// 嘗試重複啟動
+	// Try to start again
 	err = pool.Start(4)
 	assert.Error(t, err)
 
 	pool.Stop()
 }
 
-// TestWorkerExecution 測試 Worker 執行任務
+// TestWorkerExecution tests Worker job execution
 func TestWorkerExecution(t *testing.T) {
 	pool := NewPool(10)
-	err := pool.Start(1) // 單一 Worker
+	err := pool.Start(1) // Single Worker
 	require.NoError(t, err)
 
-	// 提交 10 個任務
+	// Submit 10 tasks
 	taskCount := 10
 	for i := 0; i < taskCount; i++ {
 		task := Task{
@@ -65,7 +65,7 @@ func TestWorkerExecution(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// 收集結果
+	// Collect results
 	results := make(map[types.JobID]Result)
 	for i := 0; i < taskCount; i++ {
 		result, err := pool.ReceiveResult()
@@ -73,32 +73,32 @@ func TestWorkerExecution(t *testing.T) {
 		results[result.JobID] = result
 	}
 
-	// 驗證所有任務都收到結果
+	// Verify all tasks received results
 	assert.Equal(t, taskCount, len(results))
 
 	pool.Stop()
 }
 
-// TestTimeout 測試任務超時機制
+// TestTimeout tests job timeout mechanism
 func TestTimeout(t *testing.T) {
 	pool := NewPool(10)
 	err := pool.Start(1)
 	require.NoError(t, err)
 
-	// 提交超時任務（超時時間設得很短）
+	// Submit timeout task (with very short timeout)
 	task := Task{
 		ID:      types.JobID("timeout-task"),
 		Payload: map[string]interface{}{},
-		Timeout: 1 * time.Millisecond, // 極短的超時時間
+		Timeout: 1 * time.Millisecond, // Very short timeout
 	}
 	err = pool.Submit(task)
 	require.NoError(t, err)
 
-	// 接收結果
+	// Receive result
 	result, err := pool.ReceiveResult()
 	require.NoError(t, err)
 
-	// 驗證任務因超時而失敗
+	// Verify task failed due to timeout
 	assert.False(t, result.Success)
 	assert.Error(t, result.Error)
 	assert.Contains(t, result.Error.Error(), "deadline exceeded")
@@ -107,10 +107,10 @@ func TestTimeout(t *testing.T) {
 }
 
 // ============================================================================
-// 並發測試
+// Concurrency Tests
 // ============================================================================
 
-// TestConcurrency 測試並發執行
+// TestConcurrency tests concurrent execution
 func TestConcurrency(t *testing.T) {
 	pool := NewPool(100)
 	workerCount := 8
@@ -121,7 +121,7 @@ func TestConcurrency(t *testing.T) {
 
 	start := time.Now()
 
-	// 快速提交 100 個任務
+	// Quickly submit 100 tasks
 	for i := 0; i < taskCount; i++ {
 		task := Task{
 			ID:      types.JobID(fmt.Sprintf("task-%d", i)),
@@ -132,7 +132,7 @@ func TestConcurrency(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// 收集所有結果
+	// Collect all results
 	successCount := 0
 	failCount := 0
 	for i := 0; i < taskCount; i++ {
@@ -147,19 +147,19 @@ func TestConcurrency(t *testing.T) {
 
 	duration := time.Since(start)
 
-	// 驗證結果
+	// Verify results
 	assert.Equal(t, taskCount, successCount+failCount)
 	t.Logf("Processed %d tasks in %v with %d workers", taskCount, duration, workerCount)
 	t.Logf("Success: %d, Failed: %d", successCount, failCount)
 
-	// 並發執行應該比串行快很多
-	// 假設每個任務平均 250ms，串行需要 25s，並發應該 < 10s
+	// Concurrent execution should be much faster than serial
+	// Assuming avg 250ms per task, serial would take 25s, concurrent should be < 10s
 	assert.Less(t, duration, 10*time.Second)
 
 	pool.Stop()
 }
 
-// TestConcurrentSubmit 測試並發提交任務
+// TestConcurrentSubmit tests concurrent job submission
 func TestConcurrentSubmit(t *testing.T) {
 	pool := NewPool(100)
 	err := pool.Start(4)
@@ -169,7 +169,7 @@ func TestConcurrentSubmit(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(taskCount)
 
-	// 並發提交任務
+	// Concurrently submit tasks
 	for i := 0; i < taskCount; i++ {
 		go func(index int) {
 			defer wg.Done()
@@ -185,7 +185,7 @@ func TestConcurrentSubmit(t *testing.T) {
 
 	wg.Wait()
 
-	// 收集所有結果
+	// Collect all results
 	for i := 0; i < taskCount; i++ {
 		_, err := pool.ReceiveResult()
 		require.NoError(t, err)
@@ -195,16 +195,16 @@ func TestConcurrentSubmit(t *testing.T) {
 }
 
 // ============================================================================
-// 優雅關閉測試
+// Graceful Shutdown Tests
 // ============================================================================
 
-// TestGracefulShutdown 測試優雅關閉
+// TestGracefulShutdown tests graceful shutdown
 func TestGracefulShutdown(t *testing.T) {
 	pool := NewPool(50)
 	err := pool.Start(4)
 	require.NoError(t, err)
 
-	// 提交 50 個任務
+	// Submit 50 tasks
 	taskCount := 50
 	for i := 0; i < taskCount; i++ {
 		task := Task{
@@ -216,41 +216,41 @@ func TestGracefulShutdown(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// 等待部分任務完成
+	// Wait for some tasks to complete
 	completedCount := 10
 	for i := 0; i < completedCount; i++ {
 		_, err := pool.ReceiveResult()
 		require.NoError(t, err)
 	}
 
-	// 記錄關閉前的 goroutine 數量
+	// Record goroutine count before shutdown
 	goroutinesBefore := runtime.NumGoroutine()
 
-	// 優雅關閉
+	// Graceful shutdown
 	pool.Stop()
 
-	// 驗證所有 Worker goroutine 都已退出
-	// 給一點時間讓 goroutine 清理
+	// Verify all Worker goroutines have exited
+	// Give some time for goroutine cleanup
 	time.Sleep(100 * time.Millisecond)
 	goroutinesAfter := runtime.NumGoroutine()
 
-	// Worker goroutine 應該減少
+	// Worker goroutines should decrease
 	assert.LessOrEqual(t, goroutinesAfter, goroutinesBefore)
 
 	t.Logf("Goroutines before: %d, after: %d", goroutinesBefore, goroutinesAfter)
 }
 
-// TestStopBeforeStart 測試在啟動前關閉
+// TestStopBeforeStart tests stopping before starting
 func TestStopBeforeStart(t *testing.T) {
 	pool := NewPool(10)
 
-	// 未啟動時關閉不應該 panic
+	// Stopping before starting should not panic
 	assert.NotPanics(t, func() {
 		pool.Stop()
 	})
 }
 
-// TestSubmitAfterStop 測試關閉後提交任務
+// TestSubmitAfterStop tests submitting jobs after shutdown
 func TestSubmitAfterStop(t *testing.T) {
 	pool := NewPool(10)
 	err := pool.Start(2)
@@ -258,7 +258,7 @@ func TestSubmitAfterStop(t *testing.T) {
 
 	pool.Stop()
 
-	// 關閉後提交任務應該返回錯誤
+	// Submitting tasks after shutdown should return error
 	task := Task{
 		ID:      types.JobID("task-after-stop"),
 		Payload: map[string]interface{}{},
@@ -270,19 +270,19 @@ func TestSubmitAfterStop(t *testing.T) {
 }
 
 // ============================================================================
-// 通道緩衝測試
+// Channel Buffer Tests
 // ============================================================================
 
-// TestChannelBuffer 測試通道緩衝機制
+// TestChannelBuffer tests channel buffering mechanism
 func TestChannelBuffer(t *testing.T) {
 	bufferSize := 5
 	pool := NewPool(bufferSize)
 
-	// 啟動 1 個 Worker，但讓它慢慢處理
+	// Start 1 Worker, let it process slowly
 	err := pool.Start(1)
 	require.NoError(t, err)
 
-	// 快速提交超過緩衝大小的任務
+	// Quickly submit more tasks than buffer size
 	taskCount := bufferSize + 3
 	submitted := 0
 	for i := 0; i < taskCount; i++ {
@@ -297,10 +297,10 @@ func TestChannelBuffer(t *testing.T) {
 		}
 	}
 
-	// 驗證任務都成功提交（可能有些在 buffer，有些在 Worker 處理）
+	// Verify all tasks submitted successfully (some in buffer, some being processed)
 	assert.Equal(t, taskCount, submitted)
 
-	// 等待所有任務完成
+	// Wait for all tasks to complete
 	for i := 0; i < submitted; i++ {
 		_, err := pool.ReceiveResult()
 		assert.NoError(t, err)
@@ -310,14 +310,14 @@ func TestChannelBuffer(t *testing.T) {
 }
 
 // ============================================================================
-// 錯誤處理測試
+// Error Handling Tests
 // ============================================================================
 
-// TestSubmitBeforeStart 測試啟動前提交任務
+// TestSubmitBeforeStart tests submitting jobs before starting
 func TestSubmitBeforeStart(t *testing.T) {
 	pool := NewPool(10)
 
-	// 未啟動時提交任務應該返回錯誤
+	// Submitting tasks before starting should return error
 	task := Task{
 		ID:      types.JobID("task-before-start"),
 		Payload: map[string]interface{}{},
@@ -328,7 +328,7 @@ func TestSubmitBeforeStart(t *testing.T) {
 	assert.Equal(t, ErrPoolNotStarted, err)
 }
 
-// TestReceiveResultAfterStop 測試關閉後接收結果
+// TestReceiveResultAfterStop tests receiving results after shutdown
 func TestReceiveResultAfterStop(t *testing.T) {
 	pool := NewPool(10)
 	err := pool.Start(2)
@@ -336,17 +336,17 @@ func TestReceiveResultAfterStop(t *testing.T) {
 
 	pool.Stop()
 
-	// 關閉後接收結果應該返回錯誤
+	// Receiving results after shutdown should return error
 	_, err = pool.ReceiveResult()
 	assert.Error(t, err)
 	assert.Equal(t, ErrPoolClosed, err)
 }
 
 // ============================================================================
-// Worker 行為測試
+// Worker Behavior Tests
 // ============================================================================
 
-// TestWorkerExecuteSuccess 測試 Worker 執行成功
+// TestWorkerExecuteSuccess tests Worker successful execution
 func TestWorkerExecuteSuccess(t *testing.T) {
 	worker := &Worker{
 		id:       1,
@@ -357,7 +357,7 @@ func TestWorkerExecuteSuccess(t *testing.T) {
 	ctx := context.Background()
 	payload := map[string]interface{}{"test": "data"}
 
-	// 執行多次，至少有一次會成功（90% 成功率）
+	// Execute multiple times, at least one should succeed (90% success rate)
 	successCount := 0
 	attempts := 20
 	for i := 0; i < attempts; i++ {
@@ -367,12 +367,12 @@ func TestWorkerExecuteSuccess(t *testing.T) {
 		}
 	}
 
-	// 驗證至少有一些成功
+	// Verify at least some succeeded
 	assert.Greater(t, successCount, 0)
 	t.Logf("Success rate: %d/%d", successCount, attempts)
 }
 
-// TestWorkerExecuteTimeout 測試 Worker 執行超時
+// TestWorkerExecuteTimeout tests Worker execution timeout
 func TestWorkerExecuteTimeout(t *testing.T) {
 	worker := &Worker{
 		id:       1,
@@ -380,25 +380,25 @@ func TestWorkerExecuteTimeout(t *testing.T) {
 		resultCh: make(chan Result, 1),
 	}
 
-	// 建立已超時的 context
+	// Create already timed-out context
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
 	defer cancel()
 
-	time.Sleep(10 * time.Millisecond) // 確保超時
+	time.Sleep(10 * time.Millisecond) // Ensure timeout
 
 	payload := map[string]interface{}{"test": "data"}
 	err := worker.execute(ctx, payload)
 
-	// 驗證超時錯誤
+	// Verify timeout error
 	assert.Error(t, err)
 	assert.Equal(t, context.DeadlineExceeded, err)
 }
 
 // ============================================================================
-// Benchmark 測試
+// Benchmark Tests
 // ============================================================================
 
-// BenchmarkPoolSubmit 測試提交任務的效能
+// BenchmarkPoolSubmit tests job submission performance
 func BenchmarkPoolSubmit(b *testing.B) {
 	pool := NewPool(1000)
 	pool.Start(8)
@@ -415,13 +415,13 @@ func BenchmarkPoolSubmit(b *testing.B) {
 	}
 }
 
-// BenchmarkPoolThroughput 測試吞吐量
+// BenchmarkPoolThroughput tests throughput
 func BenchmarkPoolThroughput(b *testing.B) {
 	pool := NewPool(1000)
 	pool.Start(8)
 	defer pool.Stop()
 
-	// 在背景接收結果
+	// Receive results in background
 	go func() {
 		for {
 			_, err := pool.ReceiveResult()

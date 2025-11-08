@@ -1,19 +1,19 @@
 // ============================================================================
-// Beaver-Raft Worker - 任務執行單元
+// Beaver-Raft Worker - Task Execution Unit
 // ============================================================================
 //
 // Package: internal/worker
-// 文件: worker.go
-// 功能: 實際執行任務的工作單元，每個 Worker 運行在獨立的 goroutine 中
+// File: worker.go
+// Function: Work unit that actually executes tasks, each Worker runs in an independent goroutine
 //
-// 工作原理:
-//   每個 Worker 是一個獨立的 goroutine，持續執行以下循環：
-//   1. 從 taskCh 接收任務（阻塞等待）
-//   2. 執行任務邏輯（帶超時控制）
-//   3. 將結果發送到 resultCh
-//   4. 重複上述過程，直到 taskCh 關閉
+// How it works:
+//   Each Worker is an independent goroutine that continuously executes the following loop:
+//   1. Receive task from taskCh (blocking wait)
+//   2. Execute task logic (with timeout control)
+//   3. Send result to resultCh
+//   4. Repeat above process until taskCh is closed
 //
-// 執行模型:
+// Execution Model:
 //   ┌─────────────────────────────────────┐
 //   │  Worker Goroutine                   │
 //   │  ┌──────────────────────────────┐   │
@@ -24,28 +24,28 @@
 //   │  └──────────────────────────────┘   │
 //   └─────────────────────────────────────┘
 //
-// 超時控制:
-//   使用 context.WithTimeout 確保任務不會無限執行：
-//   - 每個任務有獨立的 Context
-//   - 超時後 Context.Done() channel 關閉
-//   - execute() 方法監聽 Done() channel
-//   - 超時返回 context.DeadlineExceeded 錯誤
+// Timeout Control:
+//   Use context.WithTimeout to ensure tasks don't execute indefinitely:
+//   - Each task has independent Context
+//   - After timeout, Context.Done() channel closes
+//   - execute() method monitors Done() channel
+//   - Timeout returns context.DeadlineExceeded error
 //
-// 任務執行邏輯 (模擬):
-//   當前實現為測試模擬：
-//   - 隨機延遲 0-500ms（模擬 CPU 密集型工作）
-//   - 10% 的失敗率（模擬真實環境中的錯誤）
-//   - 生產環境應替換為實際業務邏輯
+// Task Execution Logic (Simulation):
+//   Current implementation is for testing simulation:
+//   - Random delay 0-500ms (simulate CPU-intensive work)
+//   - 10% failure rate (simulate errors in real environment)
+//   - Production environment should replace with actual business logic
 //
-// 錯誤處理:
-//   - 超時錯誤: ctx.Err() 返回 DeadlineExceeded
-//   - 執行失敗: 返回自定義錯誤
-//   - 所有錯誤都封裝在 Result 中返回
+// Error Handling:
+//   - Timeout error: ctx.Err() returns DeadlineExceeded
+//   - Execution failure: Returns custom error
+//   - All errors are encapsulated in Result and returned
 //
-// 資源管理:
-//   - Context 在每次任務執行後調用 cancel() 釋放
-//   - 避免 Context 洩漏和資源浪費
-//   - Worker 退出時自動清理所有資源
+// Resource Management:
+//   - Context calls cancel() after each task execution for release
+//   - Avoid Context leak and resource waste
+//   - Worker automatically cleans up all resources on exit
 //
 // ============================================================================
 
@@ -58,15 +58,15 @@ import (
 	"time"
 )
 
-// Worker 代表一個工作執行單元
-// 每個 Worker 運行在獨立的 goroutine 中，從任務通道接收任務並執行
+// Worker represents a work execution unit
+// Each Worker runs in an independent goroutine, receives tasks from task channel and executes them
 type Worker struct {
-	id       int           // Worker 唯一識別碼，用於日誌和調試
-	taskCh   <-chan Task   // 任務通道（只讀），接收待執行的任務
-	resultCh chan<- Result // 結果通道（只寫），發送任務執行結果
+	id       int           // Worker unique identifier, used for logging and debugging
+	taskCh   <-chan Task   // Task channel (read-only), receives tasks to execute
+	resultCh chan<- Result // Result channel (write-only), sends task execution results
 }
 
-// newWorker 建立新的 Worker 實例
+// newWorker creates a new Worker instance
 func newWorker(id int, taskCh <-chan Task, resultCh chan<- Result) *Worker {
 	return &Worker{
 		id:       id,
@@ -75,20 +75,20 @@ func newWorker(id int, taskCh <-chan Task, resultCh chan<- Result) *Worker {
 	}
 }
 
-// Run 是 Worker 的主循環，從任務通道接收任務並執行
-// 每個任務執行後，會將結果發送到結果通道
+// Run is the main loop of Worker, receives tasks from task channel and executes them
+// After each task execution, sends the result to result channel
 func (w *Worker) Run() {
 	for task := range w.taskCh {
 		start := time.Now()
 
-		// 建立帶超時的 Context，確保任務不會執行超過指定時間
+		// Create Context with timeout, ensure task won't execute longer than specified time
 		ctx, cancel := context.WithTimeout(context.Background(), task.Timeout)
 
-		// 執行任務邏輯，並在完成後釋放 Context 資源
+		// Execute task logic, and release Context resources after completion
 		err := w.execute(ctx, task.Payload)
-		cancel() // 釋放資源
+		cancel() // Release resources
 
-		// 將執行結果封裝為 Result 結構體
+		// Encapsulate execution result as Result struct
 		result := Result{
 			JobID:    task.ID,
 			Success:  err == nil,
@@ -96,34 +96,34 @@ func (w *Worker) Run() {
 			Duration: time.Since(start),
 		}
 
-		// 嘗試將結果發送到結果通道
+		// Attempt to send result to result channel
 		select {
 		case w.resultCh <- result:
-			// 成功回報結果
+			// Successfully reported result
 		default:
-			// 如果結果通道已滿或關閉，則忽略（罕見情況）
-			// 在生產環境中應記錄日誌以便排查問題
+			// If result channel is full or closed, ignore (rare case)
+			// In production environment, should log for troubleshooting
 		}
 	}
 }
 
-// execute 執行實際的任務邏輯
-// - 使用帶超時的 Context 確保任務不會無限期執行
-// - 模擬工作邏輯包括隨機延遲和 10% 的失敗率
+// execute executes the actual task logic
+// - Uses Context with timeout to ensure task won't execute indefinitely
+// - Simulated work logic includes random delay and 10% failure rate
 func (w *Worker) execute(ctx context.Context, payload map[string]interface{}) error {
-	// 模擬 CPU 密集型工作，隨機延遲 0-500 毫秒
+	// Simulate CPU-intensive work, random delay 0-500 milliseconds
 	workDuration := time.Duration(rand.Intn(500)) * time.Millisecond
 
 	select {
 	case <-ctx.Done():
-		// 如果 Context 被取消或超時，返回對應的錯誤
+		// If Context is cancelled or timed out, return corresponding error
 		return ctx.Err()
 
 	case <-time.After(workDuration):
-		// 模擬 10% 的失敗率
+		// Simulate 10% failure rate
 		if rand.Intn(100) < 10 {
-			return errors.New("模擬執行失敗")
+			return errors.New("simulated execution failure")
 		}
-		return nil // 成功執行
+		return nil // Successful execution
 	}
 }
