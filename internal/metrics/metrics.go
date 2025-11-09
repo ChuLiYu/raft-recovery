@@ -1,86 +1,86 @@
 // ============================================================================
-// Beaver-Raft Metrics - Prometheus 監控指標
+// Beaver-Raft Metrics - Prometheus Monitoring
 // ============================================================================
 //
 // Package: internal/metrics
-// 文件: metrics.go
-// 功能: 收集和暴露系統運行指標，支持 Prometheus 監控
+// File: metrics.go
+// Purpose: Collect and expose system metrics for Prometheus monitoring
 //
-// 監控理念:
-//   基於 RED 方法（Rate, Errors, Duration）和 USE 方法（Utilization, Saturation, Errors）
-//   提供全面的系統可觀測性
+// Monitoring Philosophy:
+//   Based on RED (Rate, Errors, Duration) and USE (Utilization, Saturation, Errors)
+//   Provides comprehensive system observability
 //
-// 指標分類:
+// Metric Categories:
 //
-//   1. 任務計數器 (Counter) - 累計值，只增不減：
-//      - jobs_enqueued_total: 入隊任務總數
-//      - jobs_dispatched_total: 已分派任務總數
-//      - jobs_completed_total: 已完成任務總數
-//      - jobs_failed_total: 失敗任務總數
-//      - jobs_dead_total: 死信任務總數
+//   1. Job Counters - Cumulative, monotonically increasing:
+//      - jobs_enqueued_total: Total enqueued jobs
+//      - jobs_dispatched_total: Total dispatched jobs
+//      - jobs_completed_total: Total completed jobs
+//      - jobs_failed_total: Total failed jobs
+//      - jobs_dead_total: Total dead letter jobs
 //
-//   2. 性能指標 (Histogram) - 分佈統計：
-//      - job_latency_seconds: 任務處理延遲分佈
-//        * 桶分佈: 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
-//        * 用於 SLA 監控和性能分析
+//   2. Performance Metrics (Histogram) - Distribution stats:
+//      - job_latency_seconds: Job processing latency distribution
+//        * Buckets: 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+//        * For SLA monitoring and performance analysis
 //
-//   3. 狀態指標 (Gauge) - 瞬時值：
-//      - recovery_time_seconds: 最近一次恢復時間
-//      - jobs_pending: 當前待處理任務數
-//      - jobs_in_flight: 當前執行中任務數
+//   3. Status Metrics (Gauge) - Instantaneous values:
+//      - recovery_time_seconds: Last recovery time
+//      - jobs_pending: Current pending jobs
+//      - jobs_in_flight: Current executing jobs
 //
-// 使用場景:
+// Use Cases:
 //
-//   監控告警:
-//   - job_latency_seconds > 5s  → 性能下降告警
-//   - jobs_failed_total 增長率 → 錯誤率告警
-//   - jobs_pending 持續增長 → 處理能力不足
-//   - recovery_time_seconds > 3s → 恢復時間超標
+//   Alerting:
+//   - job_latency_seconds > 5s  → Performance degradation
+//   - jobs_failed_total rate increase → Error rate alert
+//   - jobs_pending continuous growth → Insufficient capacity
+//   - recovery_time_seconds > 3s → Recovery SLA breach
 //
-//   容量規劃:
-//   - jobs_completed_total / time → 吞吐量趨勢
-//   - jobs_in_flight / worker_count → Worker 利用率
-//   - jobs_pending 峰值 → 需要的 Worker 數量
+//   Capacity Planning:
+//   - jobs_completed_total / time → Throughput trends
+//   - jobs_in_flight / worker_count → Worker utilization
+//   - jobs_pending peaks → Required worker count
 //
-//   故障排查:
-//   - jobs_dead_total 突增 → 檢查業務邏輯
-//   - job_latency 異常 → 檢查系統負載
-//   - recovery_time 增長 → 檢查 WAL/Snapshot 性能
+//   Troubleshooting:
+//   - jobs_dead_total spike → Check business logic
+//   - job_latency anomaly → Check system load
+//   - recovery_time increase → Check WAL/Snapshot performance
 //
-// Prometheus 查詢示例:
+// Prometheus Query Examples:
 //
-//   # 每分鐘完成任務數
+//   # Jobs per minute
 //   rate(jobs_completed_total[1m])
 //
-//   # 95 分位延遲
+//   # 95th percentile latency
 //   histogram_quantile(0.95, job_latency_seconds_bucket)
 //
-//   # 錯誤率
+//   # Error rate
 //   rate(jobs_failed_total[5m]) / rate(jobs_dispatched_total[5m])
 //
-//   # 任務積壓
+//   # Job backlog
 //   jobs_pending + jobs_in_flight
 //
-// HTTP 端點:
-//   通過 /metrics 端點暴露，由 Prometheus 定期抓取
-//   默認端口: 9090
-//   格式: OpenMetrics / Prometheus 文本格式
+// HTTP Endpoint:
+//   Exposed via /metrics endpoint, scraped by Prometheus
+//   Default port: 9090
+//   Format: OpenMetrics / Prometheus text format
 //
-// 性能考慮:
-//   - Counter/Gauge 操作是原子的，線程安全
-//   - Histogram 會計算多個桶，有一定開銷
-//   - 所有指標都使用 sync.Mutex 保護
+// Performance:
+//   - Counter/Gauge operations are atomic, thread-safe
+//   - Histogram calculates multiple buckets with overhead
+//   - All metrics protected by sync.Mutex
 //
-// 擴展建議:
-//   未來可添加的指標：
-//   - WAL 寫入延遲
-//   - Snapshot 大小和創建時間
-//   - Worker 池飽和度
-//   - 內存使用量
+// Future Extensions:
+//   Possible additional metrics:
+//   - WAL write latency
+//   - Snapshot size and creation time
+//   - Worker pool saturation
+//   - Memory usage
 //
 // ============================================================================
-// Metrics 監控模組
-// 職責：收集並暴露 Prometheus 指標
+// Metrics Module
+// Responsibility: Collect and expose Prometheus metrics
 // ============================================================================
 
 package metrics
@@ -94,27 +94,27 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Collector Prometheus 指標收集器
+// Collector collects Prometheus metrics
 type Collector struct {
-	// 任務相關指標
+	// Job-related metrics
 	jobsEnqueued   prometheus.Counter
 	jobsDispatched prometheus.Counter
 	jobsCompleted  prometheus.Counter
 	jobsFailed     prometheus.Counter
 	jobsDead       prometheus.Counter
 
-	// 效能指標
+	// Performance metrics
 	jobLatency   prometheus.Histogram
 	recoveryTime prometheus.Gauge
 
-	// 狀態指標
+	// Status metrics
 	jobsPending  prometheus.Gauge
 	jobsInFlight prometheus.Gauge
 
 	mu sync.Mutex
 }
 
-// NewCollector 創建新的指標收集器
+// NewCollector creates a new metrics collector
 func NewCollector() *Collector {
 	c := &Collector{
 		jobsEnqueued: prometheus.NewCounter(prometheus.CounterOpts{
@@ -156,7 +156,7 @@ func NewCollector() *Collector {
 		}),
 	}
 
-	// 註冊所有指標
+	// Register all metrics
 	prometheus.MustRegister(c.jobsEnqueued)
 	prometheus.MustRegister(c.jobsDispatched)
 	prometheus.MustRegister(c.jobsCompleted)
@@ -170,50 +170,50 @@ func NewCollector() *Collector {
 	return c
 }
 
-// RecordEnqueue 記錄任務加入佇列
+// RecordEnqueue records job enqueue event
 func (c *Collector) RecordEnqueue() {
 	c.jobsEnqueued.Inc()
 }
 
-// RecordDispatch 記錄任務分派
+// RecordDispatch records job dispatch event
 func (c *Collector) RecordDispatch() {
 	c.jobsDispatched.Inc()
 }
 
-// RecordCompleted 記錄任務完成
+// RecordCompleted records job completion with latency
 func (c *Collector) RecordCompleted(latencySeconds float64) {
 	c.jobsCompleted.Inc()
 	c.jobLatency.Observe(latencySeconds)
 }
 
-// RecordFailed 記錄任務失敗
+// RecordFailed records job failure event
 func (c *Collector) RecordFailed() {
 	c.jobsFailed.Inc()
 }
 
-// RecordDead 記錄任務進入死信隊列
+// RecordDead records job moved to dead letter queue
 func (c *Collector) RecordDead() {
 	c.jobsDead.Inc()
 }
 
-// SetRecoveryTime 設置恢復時間
+// SetRecoveryTime sets recovery time metric
 func (c *Collector) SetRecoveryTime(seconds float64) {
 	c.recoveryTime.Set(seconds)
 }
 
-// UpdateQueueStats 更新佇列狀態統計
+// UpdateQueueStats updates queue status statistics
 func (c *Collector) UpdateQueueStats(pending, inFlight int) {
 	c.jobsPending.Set(float64(pending))
 	c.jobsInFlight.Set(float64(inFlight))
 }
 
-// StartServer 啟動 Prometheus metrics HTTP 伺服器
+// StartServer starts Prometheus metrics HTTP server
 //
-// 參數：
-//   - port: HTTP 伺服器端口
+// Parameters:
+//   - port: HTTP server port
 //
-// 返回值：
-//   - error: 啟動失敗的錯誤
+// Returns:
+//   - error: Error on startup failure
 func StartServer(port int) error {
 	http.Handle("/metrics", promhttp.Handler())
 	addr := fmt.Sprintf(":%d", port)
