@@ -1,44 +1,44 @@
 // ============================================================================
-// Beaver-Raft 性能測試套件
+// Beaver-Raft Performance Test Suite
 // ============================================================================
 //
 // Package: test/integration
-// 文件: performance_test.go
-// 功能: 系統級性能和恢復性能測試
+// File: performance_test.go
+// Functionality: System-level performance and crash recovery performance tests
 //
-// 測試目標:
-//   1. 驗證系統吞吐量（jobs/second）
-//   2. 驗證崩潰恢復時間（< 3 秒目標）
-//   3. 驗證數據一致性和零丟失
+// Test Objectives:
+//   1. verify system throughput (jobs/second)
+//   2. verify crash recovery time (< 3 second target)
+//   3. verify data consistency and zero loss
 //
-// 測試環境:
-//   - 8 個 Worker
-//   - 模擬任務執行延遲: 0-500ms（平均 250ms）
-//   - 模擬失敗率: 10%
-//   - 最大重試次數: 3
+// Test Environment:
+//   - 8 workers
+//   - simulated task execution latency: 0-500ms (average 250ms)
+//   - simulated failure rate: 10%
+//   - max retry count: 3
 //
 // TestSystemThroughput:
-//   測試系統在正常負載下的吞吐量
-//   - 提交 500 個任務
-//   - 測量完成時間和成功率
-//   - 目標: >= 5 jobs/s, >= 85% 完成率
+//   test system throughput under normal load
+//   - submit 500 tasks
+//   - measure completion time and success rate
+//   - target: >= 5 jobs/s, >= 85% completion rate
 //
 // TestRecoveryPerformance:
-//   測試崩潰恢復性能
-//   - 提交 500 個任務
-//   - 模擬系統崩潰（Stop Controller）
-//   - 測量恢復時間（創建新 Controller 並 Start）
-//   - 目標: < 3 秒恢復時間
+//   test crash recovery performance
+//   - submit 500 tasks
+//   - simulate system crash (Stop Controller)
+//   - measure recovery time (create new Controller and Start)
+//   - target: < 3 seconds recovery time
 //
-// 性能基準:
-//   理論吞吐量計算：
-//   - 8 Worker × 1000ms / 250ms平均執行時間 = 32 jobs/s
-//   - 考慮調度開銷和重試，實際約 5-10 jobs/s
+// Performance Baseline:
+//   Theoretical throughput calculation:
+//   - 8 workers × 1000ms / 250ms average execution time = 32 jobs/s
+//   - considering scheduling overhead and retries, actual approximately 5-10 jobs/s
 //
-// 注意事項:
-//   - 測試結果受系統負載影響
-//   - CI 環境可能比本地慢
-//   - 使用臨時目錄避免測試污染
+// Notes:
+//   - test results affected by system load
+//   - CI environment may be slower than local
+//   - usetemp directory to avoid test pollution
 //
 // ============================================================================
 
@@ -53,14 +53,14 @@ import (
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
-// TestSystemThroughput 測試系統吞吐量
+// TestSystemThroughput tests system throughput
 //
-// 測試流程:
-//  1. 創建並啟動 Controller
-//  2. 批量提交 500 個任務
-//  3. 等待所有任務完成（最多 60 秒）
-//  4. 計算吞吐量和完成率
-//  5. 驗證是否達到性能目標
+// Test Flow:
+//  1. Create and start Controller
+//  2. Submit 500 tasks in batch
+//  3. Wait for all tasks to complete (up to 60 seconds)
+//  4. Calculate throughput and completion rate
+//  5. Verify meets performance target
 func TestSystemThroughput(t *testing.T) {
 	config := controller.Config{
 		WorkerCount:      8,
@@ -82,11 +82,11 @@ func TestSystemThroughput(t *testing.T) {
 	}
 	defer ctrl.Stop()
 
-	// 測試參數 - 減少任務數量以適應實際執行速度
-	// Worker 執行時間約 0-500ms，8 個 worker，30 秒可完成約 500 個任務
+	// Test parameters - reduce job count to match execution speed
+	// Worker execution time approximately 0-500ms, 8 workers, ~30s can complete ~500 tasks
 	totalJobs := 500
 
-	// 準備任務
+	// Prepare jobs
 	jobs := make([]types.Job, totalJobs)
 	for i := 0; i < totalJobs; i++ {
 		jobs[i] = types.Job{
@@ -96,15 +96,15 @@ func TestSystemThroughput(t *testing.T) {
 		}
 	}
 
-	// 開始計時
+	// Start timing
 	startTime := time.Now()
 
-	// 批次提交任務
+	// Submit jobs in batch
 	if err := ctrl.EnqueueJobs(jobs); err != nil {
 		t.Fatalf("Failed to enqueue jobs: %v", err)
 	}
 
-	// 等待所有任務完成
+	// Wait for all tasks to complete
 	maxWaitTime := 60 * time.Second
 	deadline := time.Now().Add(maxWaitTime)
 
@@ -120,15 +120,15 @@ func TestSystemThroughput(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 結束計時
+	// Stop timing
 	elapsedTime := time.Since(startTime)
 
-	// 獲取最終統計
+	// Get final stats
 	finalStats := ctrl.GetStatus()
 	completed := finalStats["completed"].(int)
 	dead := finalStats["dead"].(int)
 
-	// 計算吞吐量
+	// Compute throughput
 	throughput := float64(completed) / elapsedTime.Seconds()
 
 	t.Logf("=== Performance Test Results ===")
@@ -139,9 +139,9 @@ func TestSystemThroughput(t *testing.T) {
 	t.Logf("Throughput: %.2f jobs/second", throughput)
 	t.Logf("================================")
 
-	// 驗證目標 - 根據實際執行情況調整
-	// Worker 平均執行時間 250ms，8 個 worker，理論吞吐量約 32 jobs/s
-	// 考慮重試和調度開銷，目標設為 5 jobs/s
+	// Verify target - adjust based on actual execution
+	// Worker average execution time 250ms, 8 workers; theoretical throughput ~32 jobs/s
+	// considering retries and scheduling overhead, set target as 5 jobs/s
 	expectedThroughput := 5.0
 	if throughput < expectedThroughput {
 		t.Errorf("⚠️  Throughput %.2f jobs/s is below target of %.2f jobs/s", throughput, expectedThroughput)
@@ -149,7 +149,7 @@ func TestSystemThroughput(t *testing.T) {
 		t.Logf("✅ Throughput target met: %.2f jobs/s >= %.2f jobs/s", throughput, expectedThroughput)
 	}
 
-	// 驗證完成率 - 考慮 10% 失敗率和重試，期望至少 85% 完成
+	// Verify completion rate - considering 10% failure rate and retries, expect at least 85% completion
 	minCompletionRate := 85
 	if completed < totalJobs*minCompletionRate/100 {
 		t.Errorf("Completion rate too low: %d/%d (%.1f%%)", completed, totalJobs, float64(completed)/float64(totalJobs)*100)
@@ -158,7 +158,7 @@ func TestSystemThroughput(t *testing.T) {
 	}
 }
 
-// TestRecoveryPerformance 測試恢復性能
+// TestRecoveryPerformance tests recovery performance
 func TestRecoveryPerformance(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -172,7 +172,7 @@ func TestRecoveryPerformance(t *testing.T) {
 		WALBufferSize:    100,
 	}
 
-	// 階段 1: 創建並運行控制器
+	// Phase 1: create and run controller
 	ctrl1, err := controller.NewController(config)
 	if err != nil {
 		t.Fatalf("Failed to create controller: %v", err)
@@ -182,7 +182,7 @@ func TestRecoveryPerformance(t *testing.T) {
 		t.Fatalf("Failed to start controller: %v", err)
 	}
 
-	// 添加 500 個任務
+	// Add 500 tasks
 	jobs := make([]types.Job, 500)
 	for i := 0; i < 500; i++ {
 		jobs[i] = types.Job{
@@ -196,7 +196,7 @@ func TestRecoveryPerformance(t *testing.T) {
 		t.Fatalf("Failed to enqueue jobs: %v", err)
 	}
 
-	// 等待快照完成
+	// Wait for snapshot to complete
 	time.Sleep(3 * time.Second)
 
 	stats1 := ctrl1.GetStatus()
@@ -204,7 +204,7 @@ func TestRecoveryPerformance(t *testing.T) {
 
 	ctrl1.Stop()
 
-	// 階段 2: 測量恢復時間
+	// Phase 2: measure recovery time
 	t.Log("Simulating crash recovery...")
 	startTime := time.Now()
 
@@ -224,7 +224,7 @@ func TestRecoveryPerformance(t *testing.T) {
 
 	defer ctrl2.Stop()
 
-	// 驗證恢復時間
+	// Verify recovery time
 	t.Logf("=== Recovery Performance ===")
 	t.Logf("Recovery time: %v", recoveryTime)
 	t.Logf("Jobs recovered: %d", stats2["pending"].(int)+stats2["in_flight"].(int)+stats2["completed"].(int))

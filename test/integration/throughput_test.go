@@ -21,7 +21,7 @@ func BenchmarkThroughput(b *testing.B) {
 	go ctrl.Start()
 	defer ctrl.Stop()
 
-	// 模擬高併發任務
+	// Simulate high-concurrency tasks
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		jobs := generateTestJobs(1000)

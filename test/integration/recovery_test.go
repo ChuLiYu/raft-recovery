@@ -1,41 +1,41 @@
 // ============================================================================
-// Beaver-Raft 恢復測試套件
+// Beaver-Raft Recovery Test Suite
 // ============================================================================
 //
 // Package: test/integration
-// 文件: recovery_test.go
-// 功能: 端到端恢復功能測試
+// file: recovery_test.go
+// functionality: end-to-end recovery functionality tests
 //
-// 測試目標:
-//   驗證系統在正常運行時的任務處理能力：
-//   1. 任務成功入隊
-//   2. Worker 正常執行任務
-//   3. 任務狀態正確更新
-//   4. 失敗任務正確標記為死信
+// test objectives:
+//   verify system job handling capability under normal operation:
+//   1. jobs successfully enqueued
+//   2. workers execute jobs normally
+//   3. job state updated correctly
+//   4. failed jobs marked as dead-letter correctly
 //
 // TestEndToEndRecovery:
-//   完整的任務生命週期測試
-//   - 提交 50 個任務
-//   - 等待執行完成（10 秒）
-//   - 驗證至少 70% 任務完成
-//   - 考慮 10% 的模擬失敗率
+//   full job lifecycle test
+//   - submit 50 jobs
+//   - wait for execution to complete (10s)
+//   - verify at least 70% of jobs complete
+//   - considering a 10% simulated failure rate
 //
-// 測試配置:
-//   - 4 個 Worker（較少以便觀察）
-//   - 5 秒任務超時
-//   - 10 秒快照間隔
+// test configuration:
+//   - 4 workers (smaller number for observability)
+//   - 5s task timeout
+//   - 10s snapshot interval
 //
-// 預期結果:
-//   在有 10% 失敗率的情況下：
-//   - 完成任務: >= 35 (70%)
-//   - 死信任務: <= 15 (30%)
-//   - 無丟失: 完成 + 死信 = 總數
+// expected result:
+//   with a 10% failure rate:
+//   - completed jobs: >= 35 (70%)
+//   - dead-letter jobs: <= 15 (30%)
+//   - no loss: completed + dead = total
 //
-// 失敗場景:
-//   如果完成率低於 70%，可能原因：
-//   1. Worker 執行時間過長
-//   2. 系統負載過高
-//   3. 測試等待時間不足
+// failure scenarios:
+//   if completion rate is below 70%, possible causes:
+//   1. worker execution time too long
+//   2. system load too high
+//   3. test wait time insufficient
 //
 // ============================================================================
 
@@ -51,8 +51,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// generateTestJobs 生成指定數量的測試任務
-// 每個任務包含簡單的 payload，用於測試而非實際業務邏輯
+// generateTestJobs generates the specified number of test jobs
+// Each job contains a simple payload for tests rather than real business logic
 func generateTestJobs(count int) []types.Job {
 	jobs := make([]types.Job, count)
 	for i := 0; i < count; i++ {
@@ -65,47 +65,47 @@ func generateTestJobs(count int) []types.Job {
 }
 
 func TestEndToEndRecovery(t *testing.T) {
-	// 清理測試文件
+	// prepare temp file paths
 	walPath := fmt.Sprintf("/tmp/test-recovery-wal-%d.log", time.Now().UnixNano())
 	snapshotPath := fmt.Sprintf("/tmp/test-recovery-snapshot-%d.json", time.Now().UnixNano())
 
 	config := controller.Config{
 		WorkerCount:      4,
 		TaskTimeout:      5 * time.Second,
-		SnapshotInterval: 10 * time.Second, // 增加快照間隔避免干擾
+		SnapshotInterval: 10 * time.Second, // increase snapshot interval to avoid interference
 		WALPath:          walPath,
 		SnapshotPath:     snapshotPath,
 		WALBufferSize:    100,
 	}
 
-	// 第一階段：啟動並加入任務
+	// Phase 1: start controller and enqueue jobs
 	ctrl, err := controller.NewController(config)
 	require.NoError(t, err)
 
 	err = ctrl.Start()
 	require.NoError(t, err)
 
-	// 等待啟動完成
+	// wait for startup
 	time.Sleep(100 * time.Millisecond)
 
-	// 加入任務
+	// enqueue jobs
 	jobs := generateTestJobs(50)
 	err = ctrl.EnqueueJobs(jobs)
 	require.NoError(t, err)
 
-	// 等待任務完成 - 增加等待時間以適應 worker 執行速度
-	// 50 個任務，4 個 worker，平均 250ms/任務，約需要 3-4 秒
-	// 加上 10% 失敗率和重試，給足夠時間
+	// wait for jobs to complete - add buffer to accommodate worker speed
+	// 50 jobs, 4 workers, ~250ms/job, ~3-4s needed
+	// plus 10% failure rate and retries, give enough time
 	time.Sleep(10 * time.Second)
 
-	// 驗證任務完成
+	// verify jobs completed
 	status := ctrl.GetStatus()
 	ctrl.Stop()
 
 	completed := status["completed"].(int)
 	dead := status["dead"].(int)
-	t.Logf("完成任務: %d, 死信任務: %d", completed, dead)
+	t.Logf("Completed jobs: %d, Dead-letter jobs: %d", completed, dead)
 
-	// 考慮 10% 失敗率和執行時間，期望至少 35 個任務完成（70%）
-	require.GreaterOrEqual(t, completed, 35, "至少35個任務應該完成")
+	// considering 10% failure rate and execution time, expect at least 35 jobs completed (70%)
+	require.GreaterOrEqual(t, completed, 35, "at least 35 jobs should complete")
 }
