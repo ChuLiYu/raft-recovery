@@ -1,6 +1,6 @@
 # Beaver-Raft: Crash-Recoverable Job Queue System
 
-**English** | **[中文](README.zh-CN.md)** | **[Language Guide](LANGUAGE.md)**
+**English** | **[Chinese](README.zh-CN.md)** | **[Language Guide](LANGUAGE.md)**
 
 [![Go Version](https://img.shields.io/badge/Go-1.23-blue.svg)](https://golang.org/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/ChuLiYu/raft-recovery)
@@ -8,7 +8,7 @@
 
 Production-ready, crash-recoverable job queue system with sub-3s recovery time and zero data loss.
 
-> 📚 **[完整文檔導覽](DOCS_INDEX.md)** | 快速找到您需要的文檔
+> 📚 **[Full Documentation Index](docs/DOCS_INDEX.md)** | Quickly find what you need
 
 ## ✨ Features
 
@@ -36,16 +36,16 @@ make build
 
 | Document | Description |
 |----------|-------------|
-| **[USAGE_GUIDE.md](USAGE_GUIDE.md)** | 🎯 快速使用指南（中文） |
-| **[QUICKSTART.md](QUICKSTART.md)** | 📘 開發者入門（中文） |
-| **[PHASE1_SUMMARY.md](PHASE1_SUMMARY.md)** | 📋 Phase 1 完整總結 |
-| **[IMPLEMENTATION_ORDER.md](IMPLEMENTATION_ORDER.md)** | 🔢 模塊實作順序 |
+| **[USAGE_GUIDE.md](docs/guides/USAGE_GUIDE.md)** | 🎯 Quick usage guide |
+| **[QUICKSTART.md](docs/guides/QUICKSTART.md)** | 📘 Developer quickstart |
+| **[PHASE1_SUMMARY.md](docs/reports/PHASE1_SUMMARY.md)** | 📋 Phase 1 summary |
+| **[IMPLEMENTATION_ORDER.md](docs/planning/IMPLEMENTATION_ORDER.md)** | 🔢 Module implementation order |
 
 ### Architecture Docs
 
-- 🏗️ [Phase 1 Architecture](docs/phase1-architecture.md) - System design
-- 💡 [AI Notes](docs/ai-notes.md) - Design decisions
-- 📊 [Phase 1 Details](docs/phase1-snapshot-aware-job-queue.md) - Technical deep dive
+- 🏗️ [Phase 1 Architecture](docs/architecture/phase1-architecture.md) - System design
+- 💡 [AI Notes](docs/development/ai-notes.md) - Design decisions
+- 📊 [Phase 1 Details](docs/phases/phase1-snapshot-aware-job-queue.md) - Technical deep dive
 
 ## 🏗️ Architecture
 
@@ -72,7 +72,7 @@ make build
 - **WAL**: Write-Ahead Log for operation durability
 - **Snapshot Manager**: Periodic state snapshots for fast recovery
 
-## ��️ Development
+## 🛠️ Development
 
 ```bash
 # Install dependencies
@@ -243,4 +243,4 @@ Inspired by distributed systems research and production queue systems:
 
 Built with ❤️ for reliable distributed systems
 
-**Quick Links**: [使用指南](USAGE_GUIDE.md) | [開發指南](QUICKSTART.md) | [完整文檔](DOCS_INDEX.md)
+**Quick Links**: [User Guide](docs/guides/USAGE_GUIDE.md) | [Developer Guide](docs/guides/QUICKSTART.md) | [Full Docs](docs/DOCS_INDEX.md)
