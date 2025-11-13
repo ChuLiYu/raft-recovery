@@ -2,7 +2,7 @@
 
 > Quick guide to get started with Beaver-Raft crash-recoverable job queue system
 
-**[中文版](USAGE_GUIDE.zh-CN.md)** | English
+English | [Chinese version](USAGE_GUIDE.zh-CN.md)
 
 ## 🚀 Quick Start
 
