@@ -1,6 +1,6 @@
 # Beaver-Raft Phase 1: Complete Summary
 
-**English** | **[中文版](PHASE1_SUMMARY.zh-CN.md)**
+English | [Chinese version](PHASE1_SUMMARY.zh-CN.md)
 
 ## Overview
 
