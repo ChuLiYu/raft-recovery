@@ -2,7 +2,7 @@
 
 > Complete navigation guide for Beaver-Raft documentation
 
-**English** | **[中文版](DOCS_INDEX.zh-CN.md)**
+English | [Chinese version](DOCS_INDEX.zh-CN.md)
 
 ## 📚 Documentation Structure
 
