@@ -1,8 +1,8 @@
 package wal
 
 // ============================================================================
-// WAL 工具函式
-// 職責：提供 WAL 相關的輔助功能
+// WAL Utility Functions
+// Purpose: Provide WAL-related helper functionality
 // ============================================================================
 
 import (
@@ -10,207 +10,207 @@ import (
 )
 
 // ============================================================================
-// 檔案操作輔助
+// File Operation Helpers
 // ============================================================================
 
-// GetLastEvent 從 WAL 檔案讀取最後一個事件
+// GetLastEvent reads the last event from a WAL file
 //
-// 用途：
-// - NewWAL 時需要取得 last_seq 以繼續編號
-// - 驗證 WAL 完整性
+// Use cases:
+// - NewWAL needs to get last_seq to continue numbering
+// - Validate WAL integrity
 //
-// 參數：
+// Parameters:
 //
-//	path - WAL 檔案路徑
+//	path - WAL file path
 //
-// 回傳：
+// Returns:
 //
-//	最後一個事件，錯誤（如果檔案為空則回傳 ErrEmptyWAL）
+//	Last event, error (returns ErrEmptyWAL if file is empty)
 func GetLastEvent(path string) (*Event, error) {
-	// TODO: 實作最後事件讀取
-	// 策略選擇：
+	// TODO: Implement last event reading
+	// Strategy options:
 	//
-	// 方案 A：從頭到尾掃描（簡單但慢）
-	//   - 逐行讀取直到 EOF
-	//   - 回傳最後一個成功解析的事件
+	// Option A: Scan from start to end (simple but slow)
+	//   - Read line by line until EOF
+	//   - Return the last successfully parsed event
 	//
-	// 方案 B：從檔尾往前搜尋（快速但複雜）
-	//   - Seek 到檔尾
-	//   - 往前搜尋最後一個換行符
-	//   - 解析該行
+	// Option B: Search backwards from end (fast but complex)
+	//   - Seek to end of file
+	//   - Search backwards for last newline
+	//   - Parse that line
 	//
-	// 方案 C：維護 index 檔案（最快但需要額外維護）
-	//   - WAL.index 記錄每個事件的位置
-	//   - 直接跳到最後一個事件
+	// Option C: Maintain index file (fastest but requires extra maintenance)
+	//   - WAL.index records position of each event
+	//   - Jump directly to last event
 	//
-	// 思考：哪種方案適合您的場景？
+	// Consider: Which approach suits your scenario?
 
 	return nil, nil
 }
 
-// CountEvents 計算 WAL 中的事件總數
+// CountEvents counts the total number of events in WAL
 //
-// 用途：
-// - 除錯與診斷
-// - 統計與監控
+// Use cases:
+// - Debugging and diagnostics
+// - Statistics and monitoring
 func CountEvents(path string) (int, error) {
-	// TODO: 實作事件計數
-	// 1. 開啟檔案
-	// 2. 使用 decoder 逐行讀取
-	// 3. 計數成功解析的事件
-	// 4. 忽略損壞的事件？還是回傳錯誤？
+	// TODO: Implement event counting
+	// 1. Open file
+	// 2. Read line by line using decoder
+	// 3. Count successfully parsed events
+	// 4. Ignore corrupted events? Or return error?
 
 	return 0, nil
 }
 
-// ValidateWAL 驗證 WAL 檔案的完整性
+// ValidateWAL validates WAL file integrity
 //
-// 檢查項目：
-// - 所有事件的 JSON 格式正確
-// - 所有事件的校驗和正確
-// - seq 連續且無重複
+// Checks:
+// - All events have correct JSON format
+// - All events have correct checksums
+// - seq is sequential and unique
 //
-// 回傳：
+// Returns:
 //
-//	錯誤（如果發現問題）
+//	error (if any issues found)
 func ValidateWAL(path string) error {
-	// TODO: 實作 WAL 驗證
-	// 1. Replay 所有事件
-	// 2. 驗證每個事件的 checksum
-	// 3. 驗證 seq 的連續性：
+	// TODO: Implement WAL validation
+	// 1. Replay all events
+	// 2. Validate each event's checksum
+	// 3. Validate seq continuity:
 	//    lastSeq := uint64(0)
 	//    for each event:
 	//      if event.Seq != lastSeq + 1:
 	//        return error
 	//      lastSeq = event.Seq
-	// 4. 收集並回報所有錯誤（不只是第一個）
+	// 4. Collect and report all errors (not just the first)
 
 	return nil
 }
 
 // ============================================================================
-// WAL 修復工具（進階功能）
+// WAL Repair Tools (Advanced Features)
 // ============================================================================
 
-// RepairWAL 嘗試修復損壞的 WAL
+// RepairWAL attempts to repair a corrupted WAL
 //
-// 修復策略：
-// - 掃描檔案，移除無效的事件
-// - 重新計算 seq（從 1 開始連續編號）
-// - 生成新的 WAL 檔案
+// Repair strategy:
+// - Scan file, remove invalid events
+// - Renumber seq (starting from 1, sequential)
+// - Generate new WAL file
 //
-// 警告：此操作會改變事件序號！
+// Warning: This operation will change event sequence numbers!
 func RepairWAL(srcPath, dstPath string) error {
-	// TODO: 實作 WAL 修復（選用）
-	// 1. 讀取 srcPath
-	// 2. 過濾有效事件：
-	//    - JSON 可解析
-	//    - Checksum 正確
-	// 3. 重新編號 seq
-	// 4. 寫入 dstPath
-	// 5. 思考：
-	//    - 如何處理 checksum 錯誤但 JSON 有效的事件？
-	//    - 是否需要使用者確認？
-	//    - 是否記錄被移除的事件？
+	// TODO: Implement WAL repair (optional)
+	// 1. Read from srcPath
+	// 2. Filter valid events:
+	//    - JSON is parsable
+	//    - Checksum is correct
+	// 3. Renumber seq
+	// 4. Write to dstPath
+	// 5. Consider:
+	//    - How to handle events with checksum errors but valid JSON?
+	//    - Should user confirmation be required?
+	//    - Should removed events be logged?
 
 	return nil
 }
 
-// TruncateWAL 截斷 WAL 到指定序號
+// TruncateWAL truncates WAL to specified sequence number
 //
-// 用途：
-// - 恢復到某個已知的正確狀態
-// - 回滾錯誤的操作
+// Use cases:
+// - Recover to a known good state
+// - Roll back erroneous operations
 //
-// 參數：
+// Parameters:
 //
-//	path - WAL 檔案路徑
-//	seq  - 保留到此序號（不包含）
+//	path - WAL file path
+//	seq  - Keep up to this sequence number (exclusive)
 func TruncateWAL(path string, seq uint64) error {
-	// TODO: 實作 WAL 截斷（選用）
-	// 1. 讀取所有事件
-	// 2. 過濾 seq < targetSeq 的事件
-	// 3. 寫入新檔案
-	// 4. 原子替換舊檔案
-	// 5. 警告：確保操作的原子性！
+	// TODO: Implement WAL truncation (optional)
+	// 1. Read all events
+	// 2. Filter events with seq < targetSeq
+	// 3. Write to new file
+	// 4. Atomically replace old file
+	// 5. Warning: Ensure operation atomicity!
 
 	return nil
 }
 
 // ============================================================================
-// 除錯與診斷工具
+// Debugging and Diagnostic Tools
 // ============================================================================
 
-// DumpWAL 輸出 WAL 內容（人類可讀格式）
+// DumpWAL outputs WAL contents (human-readable format)
 //
-// 用途：
-// - 除錯
-// - 手動檢查事件
+// Use cases:
+// - Debugging
+// - Manual event inspection
 func DumpWAL(path string, w io.Writer) error {
-	// TODO: 實作 WAL dump
-	// 1. 讀取所有事件
-	// 2. 格式化輸出：
+	// TODO: Implement WAL dump
+	// 1. Read all events
+	// 2. Format output:
 	//    [Seq:1] ENQUEUE job-001 at 2024-01-01T00:00:00 (checksum:0x12345678)
 	//    [Seq:2] DISPATCH job-001 at 2024-01-01T00:00:01 (checksum:0x87654321)
-	// 3. 標記損壞的事件
+	// 3. Mark corrupted events
 
 	return nil
 }
 
-// CompareWAL 比較兩個 WAL 檔案的差異
+// CompareWAL compares differences between two WAL files
 //
-// 用途：
-// - 測試
-// - 驗證 Rotate 正確性
+// Use cases:
+// - Testing
+// - Verify Rotate correctness
 func CompareWAL(path1, path2 string) ([]string, error) {
-	// TODO: 實作 WAL 比較（選用）
-	// 1. 讀取兩個檔案的所有事件
-	// 2. 比較：
-	//    - 事件數量
-	//    - 每個事件的內容
-	// 3. 回傳差異列表
+	// TODO: Implement WAL comparison (optional)
+	// 1. Read all events from both files
+	// 2. Compare:
+	//    - Event count
+	//    - Content of each event
+	// 3. Return difference list
 
 	return nil, nil
 }
 
 // ============================================================================
-// 統計與分析
+// Statistics and Analysis
 // ============================================================================
 
-// WALStats WAL 統計資訊
+// WALStats WAL statistics information
 type WALStats struct {
-	TotalEvents    int               // 總事件數
-	EventTypes     map[EventType]int // 各類型事件計數
-	FirstSeq       uint64            // 第一個事件的 seq
-	LastSeq        uint64            // 最後一個事件的 seq
-	TimeRange      [2]int64          // 時間範圍 [最早, 最晚]
-	CorruptedCount int               // 損壞事件數
+	TotalEvents    int               // Total number of events
+	EventTypes     map[EventType]int // Event count by type
+	FirstSeq       uint64            // Sequence number of first event
+	LastSeq        uint64            // Sequence number of last event
+	TimeRange      [2]int64          // Time range [earliest, latest]
+	CorruptedCount int               // Number of corrupted events
 }
 
-// GetWALStats 取得 WAL 的統計資訊
+// GetWALStats retrieves WAL statistics
 func GetWALStats(path string) (*WALStats, error) {
-	// TODO: 實作統計資訊收集
-	// 1. 掃描整個 WAL
-	// 2. 收集各種統計資料
-	// 3. 回傳 WALStats 結構
+	// TODO: Implement statistics collection
+	// 1. Scan entire WAL
+	// 2. Collect various statistics
+	// 3. Return WALStats structure
 
 	return nil, nil
 }
 
-// TODO: 其他實用工具思考
+// TODO: Other utility tools to consider
 //
-// 1. WAL 合併：
-//    - 合併多個 WAL 檔案成一個
-//    - 用於歷史資料整合
+// 1. WAL Merge:
+//    - Merge multiple WAL files into one
+//    - For historical data consolidation
 //
-// 2. WAL 分割：
-//    - 將大 WAL 檔案分割成多個小檔案
-//    - 按時間或 seq 範圍分割
+// 2. WAL Split:
+//    - Split large WAL file into multiple smaller files
+//    - Split by time or seq range
 //
-// 3. WAL 壓縮：
-//    - 移除已完成任務的 ENQUEUE/DISPATCH/ACK 事件
-//    - 只保留必要的事件（例如 Dead 任務）
+// 3. WAL Compaction:
+//    - Remove ENQUEUE/DISPATCH/ACK events for completed jobs
+//    - Keep only necessary events (e.g., Dead jobs)
 //
-// 4. WAL 匯出：
-//    - 轉換成其他格式（CSV, Parquet）
-//    - 用於資料分析
+// 4. WAL Export:
+//    - Convert to other formats (CSV, Parquet)
+//    - For data analysis

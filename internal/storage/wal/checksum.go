@@ -1,8 +1,8 @@
 package wal
 
 // ============================================================================
-// 校驗和計算
-// 職責：計算與驗證 WAL 事件的 CRC32 校驗和
+// Checksum Calculation
+// Responsibility: Calculate and verify CRC32 checksum for WAL events
 // ============================================================================
 
 import (
@@ -11,62 +11,62 @@ import (
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
 
-// CalculateChecksum 計算事件的 CRC32 校驗和
+// CalculateChecksum calculates the CRC32 checksum for an event
 //
-// 演算法：
-// - 將事件的關鍵欄位串接成字串
-// - 使用 CRC32-IEEE 多項式計算
+// Algorithm:
+// - Concatenate key fields of the event into a string
+// - Calculate using CRC32-IEEE polynomial
 //
-// 參數：
+// Parameters:
 //
-//	eventType - 事件類型
-//	jobID     - 任務 ID
-//	seq       - 事件序號
+//	eventType - Event type
+//	jobID     - Task ID
+//	seq       - Event sequence number
 //
-// 回傳：
+// Returns:
 //
-//	uint32 校驗和
+//	uint32 checksum
 func CalculateChecksum(eventType EventType, jobID types.Job, seq uint64) uint32 {
-	// 組合事件的關鍵欄位
-	// 使用 Type + JobID + Seq 來計算 checksum
-	// 不包含 Timestamp，因為它會在重放時變化
+	// Combine key fields of the event
+	// Use Type + JobID + Seq to calculate checksum
+	// Exclude Timestamp as it will change during replay
 	data := string(eventType) + string(jobID.ID) + string(rune(seq))
 
-	// 使用 CRC32-IEEE 計算校驗和
+	// Calculate checksum using CRC32-IEEE
 	return crc32.ChecksumIEEE([]byte(data))
 }
 
-// VerifyChecksum 驗證事件的校驗和是否正確
+// VerifyChecksum verifies if the event's checksum is correct
 //
-// 參數：
+// Parameters:
 //
-//	event - 要驗證的事件
+//	event - Event to verify
 //
-// 回傳：
+// Returns:
 //
-//	bool - true 表示校驗和正確
+//	bool - true indicates checksum is correct
 func VerifyChecksum(event Event) bool {
-	// 重新計算預期的校驗和
-	// 注意：需要創建一個 types.Job 來匹配 CalculateChecksum 的簽名
+	// Recalculate expected checksum
+	// Note: Need to create a types.Job to match CalculateChecksum's signature
 	job := types.Job{ID: event.JobID}
 	expected := CalculateChecksum(event.Type, job, event.Seq)
 
-	// 比較計算出的校驗和與事件中存儲的校驗和
+	// Compare calculated checksum with stored checksum in event
 	return event.Checksum == expected
 }
 
-// TODO: 進階功能思考
+// TODO: Advanced feature considerations
 //
-// 1. 多種校驗演算法支援：
-//    - CRC32（快速，檢測隨機錯誤）
-//    - SHA256（安全，防止篡改）
-//    - 讓使用者選擇？
+// 1. Multiple checksum algorithm support:
+//    - CRC32 (fast, detects random errors)
+//    - SHA256 (secure, prevents tampering)
+//    - Let user choose?
 //
-// 2. 校驗範圍：
-//    - 目前只校驗 Type + JobID + Seq
-//    - 是否應該包含 Timestamp？
-//    - 是否應該包含整個 Event JSON？
+// 2. Checksum scope:
+//    - Currently only checksums Type + JobID + Seq
+//    - Should Timestamp be included?
+//    - Should entire Event JSON be included?
 //
-// 3. 效能優化：
-//    - 預先分配字串緩衝區避免重複分配
-//    - 使用 strings.Builder
+// 3. Performance optimization:
+//    - Pre-allocate string buffer to avoid repeated allocation
+//    - Use strings.Builder

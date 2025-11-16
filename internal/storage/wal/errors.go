@@ -1,69 +1,69 @@
 package wal
 
 // ============================================================================
-// WAL 錯誤定義
-// 職責：定義 WAL 相關的所有錯誤類型
+// WAL Error Definitions
+// Purpose: Define all WAL-related error types
 // ============================================================================
 
 import "errors"
 
-// 預定義錯誤
+// Predefined errors
 var (
-	// ErrCorruptedWAL 表示 WAL 檔案損壞（無法解析 JSON）
+	// ErrCorruptedWAL indicates WAL file is corrupted (cannot parse JSON)
 	ErrCorruptedWAL = errors.New("wal: file is corrupted")
 
-	// ErrChecksumMismatch 表示校驗和不符（資料損壞或篡改）
+	// ErrChecksumMismatch indicates checksum mismatch (data corruption or tampering)
 	ErrChecksumMismatch = errors.New("wal: checksum mismatch")
 
-	// ErrEmptyWAL 表示 WAL 檔案為空（重放時可能遇到）
+	// ErrEmptyWAL indicates WAL file is empty (may encounter during replay)
 	ErrEmptyWAL = errors.New("wal: file is empty")
 
-	// ErrWALClosed 表示 WAL 已關閉，無法執行操作
+	// ErrWALClosed indicates WAL is closed, cannot perform operation
 	ErrWALClosed = errors.New("wal: already closed")
 
-	// ErrSyncFailed 表示 fsync 失敗（嚴重錯誤）
+	// ErrSyncFailed indicates fsync failed (critical error)
 	ErrSyncFailed = errors.New("wal: sync to disk failed")
 )
 
-// TODO: 思考錯誤處理策略
+// TODO: Consider error handling strategies
 //
-// 1. 錯誤分類：
-//    - 可恢復錯誤（Recoverable）：暫時性失敗，可重試
-//      例如：磁碟暫時忙碌
-//    - 不可恢復錯誤（Fatal）：嚴重問題，必須停止
-//      例如：WAL 檔案損壞、校驗和錯誤
+// 1. Error classification:
+//    - Recoverable errors: Temporary failures, can retry
+//      e.g.: Disk temporarily busy
+//    - Fatal errors: Serious problems, must stop
+//      e.g.: WAL file corrupted, checksum error
 //
-// 2. 錯誤包裝：
-//    - 使用 fmt.Errorf("wal: append failed at seq=%d: %w", seq, err)
-//    - 提供更多上下文資訊（seq, jobID, 檔案位置）
+// 2. Error wrapping:
+//    - Use fmt.Errorf("wal: append failed at seq=%d: %w", seq, err)
+//    - Provide more context (seq, jobID, file location)
 //
-// 3. 錯誤回報：
-//    - 是否需要將錯誤記錄到日誌？
-//    - 是否需要通知監控系統（metrics）？
-//    - 如何讓使用者知道 WAL 出了問題？
+// 3. Error reporting:
+//    - Should errors be logged?
+//    - Should monitoring system (metrics) be notified?
+//    - How to let users know WAL has problems?
 
-// ChecksumError 表示帶有詳細資訊的校驗和錯誤
+// ChecksumError represents checksum error with detailed information
 type ChecksumError struct {
-	Seq      uint64 // 出錯的事件序號
-	Expected uint32 // 預期的校驗和
-	Actual   uint32 // 實際的校驗和
+	Seq      uint64 // Sequence number of failed event
+	Expected uint32 // Expected checksum
+	Actual   uint32 // Actual checksum
 }
 
 func (e *ChecksumError) Error() string {
-	// TODO: 實作錯誤訊息格式化
-	// 範例："wal: checksum mismatch at seq=42 (expected=0x12345678, got=0x87654321)"
+	// TODO: Implement error message formatting
+	// Example: "wal: checksum mismatch at seq=42 (expected=0x12345678, got=0x87654321)"
 	return ""
 }
 
-// CorruptionError 表示 WAL 損壞錯誤
+// CorruptionError represents WAL corruption error
 type CorruptionError struct {
-	Seq    uint64 // 出錯的事件序號（如果已知）
-	Offset int64  // 檔案中的位元組偏移量
-	Cause  error  // 底層錯誤
+	Seq    uint64 // Sequence number of failed event (if known)
+	Offset int64  // Byte offset in file
+	Cause  error  // Underlying error
 }
 
 func (e *CorruptionError) Error() string {
-	// TODO: 實作錯誤訊息格式化
+	// TODO: Implement error message formatting
 	return ""
 }
 
@@ -71,16 +71,16 @@ func (e *CorruptionError) Unwrap() error {
 	return e.Cause
 }
 
-// TODO: 進階錯誤處理思考
+// TODO: Advanced error handling considerations
 //
-// 1. 錯誤恢復機制：
-//    - 遇到損壞的事件時，是否嘗試跳過並繼續？
-//    - 是否提供「修復」功能，移除損壞的事件？
+// 1. Error recovery mechanism:
+//    - When encountering corrupted event, should we skip and continue?
+//    - Should we provide "repair" function to remove corrupted events?
 //
-// 2. 降級策略：
-//    - 如果 WAL 完全損壞，是否允許從 Snapshot 啟動？
-//    - 如何通知使用者可能有資料遺失？
+// 2. Degradation strategy:
+//    - If WAL is completely corrupted, allow starting from Snapshot?
+//    - How to notify users of possible data loss?
 //
-// 3. 防禦性編程：
-//    - 在關鍵路徑上使用 panic 還是回傳錯誤？
-//    - WAL 寫入失敗是否應該讓整個系統停止？
+// 3. Defensive programming:
+//    - Use panic or return error on critical path?
+//    - Should WAL write failure stop the entire system?
