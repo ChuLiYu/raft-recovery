@@ -1,3 +1,4 @@
 # Commit 1: Add interactive demo script with crash recovery simulation
 # Commit 2: Implement WAL-based crash recovery mechanism
 # Commit 3: Add snapshot management for fast recovery
+# Commit 4: Enhance job queue with retry logic
