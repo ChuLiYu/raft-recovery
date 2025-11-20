@@ -4,3 +4,4 @@
 # Commit 4: Enhance job queue with retry logic
 # Commit 5: Implement worker pool with concurrent processing
 # Commit 6: Add Prometheus metrics for monitoring
+# Commit 7: Create demo program for classroom presentation
