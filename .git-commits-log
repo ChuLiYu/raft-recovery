@@ -6,3 +6,4 @@
 # Commit 6: Add Prometheus metrics for monitoring
 # Commit 7: Create demo program for classroom presentation
 # Commit 8: Fix cleanup logic in demo script
+# Commit 9: Add signal handling for graceful shutdown
