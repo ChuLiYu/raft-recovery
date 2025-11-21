@@ -9,3 +9,4 @@
 # Commit 9: Add signal handling for graceful shutdown
 # Commit 10: Implement idempotent WAL replay
 # Commit 11: Add comprehensive error handling
+# Commit 12: Optimize snapshot creation performance
