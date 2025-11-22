@@ -11,3 +11,4 @@
 # Commit 11: Add comprehensive error handling
 # Commit 12: Optimize snapshot creation performance
 # Commit 13: Add job status tracking and reporting
+# Commit 14: Implement dead letter queue for failed jobs
