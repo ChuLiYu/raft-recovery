@@ -12,3 +12,4 @@
 # Commit 12: Optimize snapshot creation performance
 # Commit 13: Add job status tracking and reporting
 # Commit 14: Implement dead letter queue for failed jobs
+# Commit 15: Add configuration management with YAML
