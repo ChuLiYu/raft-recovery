@@ -13,3 +13,4 @@
 # Commit 13: Add job status tracking and reporting
 # Commit 14: Implement dead letter queue for failed jobs
 # Commit 15: Add configuration management with YAML
+# Commit 16: Create integration tests for recovery
