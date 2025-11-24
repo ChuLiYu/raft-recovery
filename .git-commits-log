@@ -14,3 +14,4 @@
 # Commit 14: Implement dead letter queue for failed jobs
 # Commit 15: Add configuration management with YAML
 # Commit 16: Create integration tests for recovery
+# Commit 17: Add documentation for crash recovery flow
