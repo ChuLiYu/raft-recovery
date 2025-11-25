@@ -15,3 +15,4 @@
 # Commit 15: Add configuration management with YAML
 # Commit 16: Create integration tests for recovery
 # Commit 17: Add documentation for crash recovery flow
+# Commit 18: Implement timeout handling for jobs
