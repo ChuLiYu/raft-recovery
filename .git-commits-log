@@ -21,3 +21,4 @@
 # Commit 21: Add metrics endpoint for health monitoring
 # Commit 22: Implement controller orchestration layer
 # Commit 23: Add job manager with state tracking
+# Commit 24: Create CLI with Cobra framework
