@@ -25,3 +25,4 @@
 # Commit 25: Add Makefile for build automation
 # Commit 26: Implement batch WAL writer for performance
 # Commit 27: Add checksum verification for WAL
+# Commit 28: Create snapshot compression feature
