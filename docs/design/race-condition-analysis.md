@@ -15,11 +15,11 @@
 WARNING: DATA RACE
 Write at 0x00c0001ae240 by goroutine 6:
   github.com/ChuLiYu/beaver-raft/internal/worker.(*Pool).Stop()
-      /Users/liyu/Programing/Beaver-Raft/internal/worker/worker_pool.go:156
+      /Users/liyu/repos/Beaver-Raft/internal/worker/worker_pool.go:156
   
 Previous read at 0x00c0001ae240 by goroutine 9:
   github.com/ChuLiYu/beaver-raft/internal/worker.(*Pool).Submit()
-      /Users/liyu/Programing/Beaver-Raft/internal/worker/worker_pool.go:115
+      /Users/liyu/repos/Beaver-Raft/internal/worker/worker_pool.go:115
 ```
 
 ---
