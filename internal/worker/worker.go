@@ -109,10 +109,25 @@ func (w *Worker) Run() {
 
 // execute executes the actual task logic
 // - Uses Context with timeout to ensure task won't execute indefinitely
-// - Simulated work logic includes random delay and 10% failure rate
+// - Supports custom sleep_ms from payload for flexible testing
 func (w *Worker) execute(ctx context.Context, payload map[string]interface{}) error {
-	// Simulate CPU-intensive work, random delay 0-500 milliseconds
-	workDuration := time.Duration(rand.Intn(500)) * time.Millisecond
+	// Check if payload specifies custom sleep duration
+	var workDuration time.Duration
+	if sleepMs, ok := payload["sleep_ms"]; ok {
+		// Use custom sleep from payload (can be int or float64 from JSON)
+		switch v := sleepMs.(type) {
+		case int:
+			workDuration = time.Duration(v) * time.Millisecond
+		case float64:
+			workDuration = time.Duration(v) * time.Millisecond
+		default:
+			// Fallback to random 0-500ms if invalid type
+			workDuration = time.Duration(rand.Intn(500)) * time.Millisecond
+		}
+	} else {
+		// Default: random delay 0-500 milliseconds for backward compatibility
+		workDuration = time.Duration(rand.Intn(500)) * time.Millisecond
+	}
 
 	select {
 	case <-ctx.Done():

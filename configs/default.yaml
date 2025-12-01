@@ -1,8 +1,8 @@
 # Beaver-Raft Configuration
 
 worker:
-  worker_count: 8
-  task_timeout: 3s
+  worker_count: 100  # Increased from 8 to 100 for better throughput
+  task_timeout: 10s  # Increased timeout for safety
 
 wal:
   dir: "./data/wal/beaver-raft.wal"

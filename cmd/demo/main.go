@@ -89,7 +89,10 @@ func main() {
 			for i := 1; i <= 1000; i++ {
 				jobs = append(jobs, types.Job{
 					ID:      types.JobID(fmt.Sprintf("crash-demo-%03d-%d", i, timestamp)),
-					Payload: map[string]interface{}{"task": fmt.Sprintf("job_%d", i)},
+					Payload: map[string]interface{}{
+						"task":     fmt.Sprintf("job_%d", i),
+						"sleep_ms": 10, // Fast jobs: 10ms each
+					},
 					Timeout: 10 * time.Second,
 				})
 			}
@@ -99,8 +102,9 @@ func main() {
 			}
 
 			fmt.Printf("✓ Enqueued %d jobs\n", len(jobs))
-			fmt.Printf("\n⚡ Jobs are being processed by 8 workers...\n")
-			fmt.Printf("💡 Press Ctrl+C NOW (within ~2 seconds) to catch jobs in-flight!\n\n")
+			fmt.Printf("\n⚡ Jobs are being processed by %d workers...\n", cfg.Worker.WorkerCount)
+			fmt.Printf("💡 Jobs are FAST (10ms each) - watch the throughput!\n")
+			fmt.Printf("💡 Press Ctrl+C anytime to simulate crash\n\n")
 
 			// Show status updates every 100ms to catch in-flight jobs
 			for i := 0; i < 20; i++ {
