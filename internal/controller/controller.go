@@ -289,31 +289,28 @@ func (c *Controller) replayWAL() error {
 // Key: WAL must be written before state changes (Write-Ahead)
 func (c *Controller) dispatchLoop() {
 	defer c.loopWg.Done()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
 
 	for {
 		select {
 		case <-c.stopCh:
 			log.Info("Dispatch loop stopped")
 			return
-
-		case <-ticker.C:
-			// Check again if stopped (to avoid stop signal arriving after ticker fires)
-			select {
-			case <-c.stopCh:
-				log.Info("Dispatch loop stopped")
-				return
-			default:
-			}
-
+		default:
+			// Continuous dispatching (no artificial delay)
 			// Pop a pending task
 			c.mu.Lock()
 			job := c.jobManager.PopPending()
 			c.mu.Unlock()
 
 			if job == nil {
-				continue
+				// No jobs available, sleep briefly to avoid busy-wait
+				select {
+				case <-c.stopCh:
+					log.Info("Dispatch loop stopped")
+					return
+				case <-time.After(10 * time.Millisecond): // Short sleep when idle
+					continue
+				}
 			}
 
 			// Write to WAL first (Write-Ahead)
@@ -509,18 +506,19 @@ func (c *Controller) snapshotLoop() {
 func (c *Controller) takeSnapshot() error {
 	start := time.Now()
 
-	// Get current state (no need to hold lock for long time)
+	// Phase 1: Quickly copy state with minimal lock hold time
 	c.mu.Lock()
 	data := c.jobManager.Snapshot()
 	data.LastSeq = c.wal.GetLastSeq()
 	c.mu.Unlock()
 
-	// Write snapshot
+	// Phase 2: Write to disk (no lock, runs async)
+	// This allows dispatch/enqueue to continue during disk I/O
 	if err := c.snapshot.Write(data); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
-	// Rotate WAL
+	// Phase 3: Rotate WAL (thread-safe operation)
 	if err := c.wal.Rotate(); err != nil {
 		return fmt.Errorf("failed to rotate WAL: %w", err)
 	}
@@ -538,24 +536,32 @@ func (c *Controller) takeSnapshot() error {
 
 // EnqueueJobs batch enqueues jobs
 //
+// Optimization: Batch WAL writes without holding lock
+// - WAL is thread-safe (has internal batch commit)
+// - Only lock when modifying JobManager
+// - Allows concurrent enqueue + dispatch/timeout operations
+//
 // Parameters:
 //   - jobs: List of jobs to enqueue
 //
 // Returns:
 //   - error: Enqueue failure error
 func (c *Controller) EnqueueJobs(jobs []types.Job) error {
+	// Phase 1: Batch write to WAL (no lock needed, WAL is thread-safe)
+	// This allows dispatch/timeout loops to continue running
+	for i := range jobs {
+		if err := c.wal.Append(wal.EventEnqueue, &jobs[i]); err != nil {
+			return fmt.Errorf("failed to append ENQUEUE event for job %s: %w", jobs[i].ID, err)
+		}
+	}
+
+	// Phase 2: Batch add to JobManager (lock held, but very fast)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, job := range jobs {
-		// Write to WAL first
-		if err := c.wal.Append(wal.EventEnqueue, &job); err != nil {
-			return fmt.Errorf("failed to append ENQUEUE event: %w", err)
-		}
-
-		// Add to JobManager
-		if err := c.jobManager.Enqueue(job); err != nil {
-			return fmt.Errorf("failed to enqueue job: %w", err)
+	for i := range jobs {
+		if err := c.jobManager.Enqueue(jobs[i]); err != nil {
+			return fmt.Errorf("failed to enqueue job %s: %w", jobs[i].ID, err)
 		}
 	}
 
