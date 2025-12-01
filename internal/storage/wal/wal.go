@@ -117,6 +117,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -158,6 +159,12 @@ type SnapshotData struct {
 
 // NewWAL creates a new WAL instance
 func NewWAL(path string, syncOnAppend bool, bufferSize int, flushInterval time.Duration) (*WAL, error) {
+	// Ensure the directory exists before opening the file
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create WAL directory: %w", err)
+	}
+
 	// Open WAL file with O_CREATE | O_APPEND | O_RDWR mode
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
@@ -287,7 +294,7 @@ func (w *WAL) Replay(handler func(event *Event) error) error {
 		if err != nil {
 			return fmt.Errorf("failed to decode event: %w", err)
 		}
-		
+
 		// Verify checksum (using VerifyChecksum)
 		if !VerifyChecksum(event) {
 			return ErrChecksumMismatch

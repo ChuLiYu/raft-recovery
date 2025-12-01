@@ -41,6 +41,12 @@ clean:
 	rm -rf ./internal/storage/wal/test_*.log.*
 	@echo "Clean complete"
 
+# 清理 demo 數據（保留目錄結構）
+clean-data:
+	@echo "Cleaning demo data files..."
+	@find ./data/wal ./data/snapshot -type f -delete 2>/dev/null || true
+	@echo "Demo data cleaned"
+
 # 運行服務器
 run: build
 	@echo "Starting Beaver-Raft server..."

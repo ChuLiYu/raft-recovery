@@ -318,14 +318,68 @@ func buildStatusCommand() *cobra.Command {
 }
 
 func showStatus() error {
-	fmt.Println("\n===== Beaver-Raft System Status =====")
-	fmt.Println("Status: Running")
-	fmt.Printf("Config: %s\n", configFile)
-	fmt.Println("WAL: Enabled")
-	fmt.Println("Snapshot: Enabled")
-	fmt.Println("Workers: Active")
-	fmt.Println("=====================================")
+	cfg, err := loadConfig(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
 
+	fmt.Println("\n╔═══════════════════════════════════════════════════════════╗")
+	fmt.Println("║           Beaver-Raft System Status                       ║")
+	fmt.Println("╚═══════════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	// System Configuration
+	fmt.Println("📋 Configuration:")
+	fmt.Printf("  └─ Config File:     %s\n", configFile)
+	fmt.Printf("  └─ Worker Count:    %d\n", cfg.Worker.WorkerCount)
+	fmt.Printf("  └─ Task Timeout:    %s\n", cfg.Worker.TaskTimeout)
+	fmt.Printf("  └─ Snapshot Every:  %ds\n", cfg.Snapshot.IntervalSeconds)
+	fmt.Println()
+
+	// Storage Configuration
+	fmt.Println("💾 Storage:")
+	fmt.Printf("  ├─ WAL Directory:       %s\n", cfg.WAL.Dir)
+	fmt.Printf("  │  └─ Buffer Size:      %d entries\n", cfg.WAL.BufferSize)
+	fmt.Printf("  │  └─ Max Segment Size: %.1f MB\n", float64(cfg.WAL.MaxSegmentSize)/(1024*1024))
+	fmt.Printf("  └─ Snapshot Directory:  %s\n", cfg.Snapshot.Dir)
+	fmt.Printf("     └─ Retention Count:  %d\n", cfg.Snapshot.RetentionCount)
+	fmt.Println()
+
+	// Job Queue Statistics (if controller is running)
+	if globalCtrl != nil {
+		stats := globalCtrl.GetStats()
+		total := stats["pending"] + stats["in_flight"] + stats["completed"] + stats["dead"]
+
+		fmt.Println("📊 Job Queue Statistics:")
+		fmt.Printf("  ├─ Total Jobs:     %d\n", total)
+		fmt.Printf("  ├─ ⏳ Pending:      %d\n", stats["pending"])
+		fmt.Printf("  ├─ 🔄 In-Flight:    %d\n", stats["in_flight"])
+		fmt.Printf("  ├─ ✅ Completed:    %d\n", stats["completed"])
+		fmt.Printf("  └─ ❌ Dead:         %d\n", stats["dead"])
+		fmt.Println()
+
+		// Calculate success rate
+		if total > 0 {
+			successRate := float64(stats["completed"]) / float64(total) * 100
+			fmt.Printf("📈 Success Rate: %.1f%%\n", successRate)
+			fmt.Println()
+		}
+	} else {
+		fmt.Println("📊 Job Queue Statistics:")
+		fmt.Println("  └─ Controller not running (run 'beaver-raft run' to start)")
+		fmt.Println()
+	}
+
+	// Metrics Status
+	fmt.Println("📡 Metrics:")
+	if cfg.Metrics.Enabled {
+		fmt.Printf("  └─ Status: ✅ Enabled on http://localhost:%d/metrics\n", cfg.Metrics.Port)
+	} else {
+		fmt.Println("  └─ Status: ⚠️  Disabled")
+	}
+	fmt.Println()
+
+	fmt.Println("═══════════════════════════════════════════════════════════")
 	return nil
 }
 

@@ -77,6 +77,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -133,6 +134,12 @@ func NewManager(path string) *Manager {
 func (m *Manager) Write(data types.SnapshotData) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Ensure the directory exists before writing snapshot
+	dir := filepath.Dir(m.path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create snapshot directory: %w", err)
+	}
 
 	// Set version number (currently 1)
 	data.SchemaVer = 1

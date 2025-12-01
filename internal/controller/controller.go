@@ -601,6 +601,13 @@ func (c *Controller) GetStatus() map[string]interface{} {
 //   - Race tests: Benign races detected, but don't affect correctness
 //
 // ============================================================================
+// GetStats returns current job queue statistics
+func (c *Controller) GetStats() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.jobManager.Stats()
+}
+
 func (c *Controller) Stop() {
 	c.mu.Lock()
 	if c.stopped {

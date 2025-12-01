@@ -120,8 +120,9 @@ func (w *Worker) execute(ctx context.Context, payload map[string]interface{}) er
 		return ctx.Err()
 
 	case <-time.After(workDuration):
-		// Simulate 10% failure rate
-		if rand.Intn(100) < 10 {
+		// Simulate failure rate (set to 0% for demo, can be adjusted for testing)
+		failureRate := 0 // Change to 10 for 10% failure rate
+		if rand.Intn(100) < failureRate {
 			return errors.New("simulated execution failure")
 		}
 		return nil // Successful execution
