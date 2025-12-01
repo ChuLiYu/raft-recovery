@@ -73,7 +73,9 @@ type Config struct {
 	MaxRetry         int           // Maximum retry count
 	WALPath          string        // WAL file path
 	SnapshotPath     string        // Snapshot file path
-	WALBufferSize    int           // WAL batch buffer size
+	// WAL batch commit settings (NEW!)
+	WALBufferSize    int           // Max events per batch (e.g., 100)
+	WALFlushInterval time.Duration // Max time between flushes (e.g., 10ms)
 }
 
 // Controller is the core controller
@@ -106,8 +108,17 @@ func NewController(config Config) (*Controller, error) {
 	// 1. Create JobManager
 	jobManager := jobmanager.NewJobManager()
 
-	// 2. Open WAL
-	walInstance, err := wal.NewWAL(config.WALPath, false, 1000, 10*time.Millisecond)
+	// 2. Open WAL with batch commit settings
+	// Use config values, with sensible defaults if not provided
+	bufferSize := config.WALBufferSize
+	if bufferSize <= 0 {
+		bufferSize = 100 // Default: 100 events per batch
+	}
+	flushInterval := config.WALFlushInterval
+	if flushInterval <= 0 {
+		flushInterval = 10 * time.Millisecond // Default: 10ms
+	}
+	walInstance, err := wal.NewWAL(config.WALPath, false, bufferSize, flushInterval)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open WAL: %w", err)
 	}

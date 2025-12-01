@@ -116,6 +116,7 @@ type Config struct {
 		SyncInterval     int    `yaml:"sync_interval"`
 		RetentionSeconds int    `yaml:"retention_seconds"`
 		BufferSize       int    `yaml:"buffer_size"`
+		FlushIntervalMs  int    `yaml:"flush_interval_ms"` // NEW: batch flush interval in ms
 	} `yaml:"wal"`
 
 	Snapshot struct {
@@ -185,6 +186,7 @@ func runController() error {
 		WALPath:          cfg.WAL.Dir,
 		SnapshotPath:     cfg.Snapshot.Dir,
 		WALBufferSize:    cfg.WAL.BufferSize,
+		WALFlushInterval: time.Duration(cfg.WAL.FlushIntervalMs) * time.Millisecond,
 	}
 
 	ctrl, err := controller.NewController(ctrlConfig)
@@ -274,6 +276,7 @@ func enqueueJobs(filePath string) error {
 			WALPath:          cfg.WAL.Dir,
 			SnapshotPath:     cfg.Snapshot.Dir,
 			WALBufferSize:    cfg.WAL.BufferSize,
+			WALFlushInterval: time.Duration(cfg.WAL.FlushIntervalMs) * time.Millisecond,
 		}
 
 		ctrl, err := controller.NewController(ctrlConfig)

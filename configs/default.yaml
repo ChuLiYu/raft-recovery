@@ -9,7 +9,9 @@ wal:
   max_segment_size: 67108864
   sync_interval: 10
   retention_seconds: 86400
-  buffer_size: 100
+  # Batch commit settings (NEW!)
+  buffer_size: 100           # Max events per batch (higher = better throughput)
+  flush_interval_ms: 10      # Max ms between flushes (lower = lower latency)
 
 snapshot:
   dir: "./data/snapshot/beaver-raft.snap"
