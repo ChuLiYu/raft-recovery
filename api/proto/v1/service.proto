@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package v1;
+
+option go_package = "github.com/ChuLiYu/raft-recovery/api/proto/v1";
+
+import "google/protobuf/timestamp.proto";
+
+// FalconQueueService defines the RPC methods for the distributed queue system.
+service FalconQueueService {
+  // Job Management
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  
+  // Worker Coordination
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc PollJobs(PollJobsRequest) returns (PollJobsResponse);
+  rpc AcknowledgeJob(AcknowledgeJobRequest) returns (AcknowledgeJobResponse);
+}
+
+// Enums matching pkg/types/types.go
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_PENDING = 1;
+  JOB_STATUS_IN_FLIGHT = 2;
+  JOB_STATUS_COMPLETED = 3;
+  JOB_STATUS_DEAD = 4;
+}
+
+message Job {
+  string id = 1;
+  bytes payload = 2; // JSON encoded payload
+  JobStatus status = 3;
+  int32 attempt = 4;
+  int64 timeout_ms = 5;
+  int64 deadline_ms = 6;
+  int64 created_at = 7; // Unix ms
+  int64 updated_at = 8; // Unix ms
+  string worker_id = 9;
+}
+
+message SubmitJobRequest {
+  string job_id = 1; // Optional: client can propose ID
+  bytes payload = 2; // JSON
+  int64 timeout_ms = 3;
+}
+
+message SubmitJobResponse {
+  bool success = 1;
+  string job_id = 2;
+  string error_message = 3;
+}
+
+message RegisterWorkerRequest {
+  string node_id = 1;
+  string address = 2;
+  int32 capacity = 3;
+  repeated string tags = 4;
+}
+
+message RegisterWorkerResponse {
+  bool success = 1;
+  int64 lease_duration_ms = 2;
+}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  int32 current_load = 2;
+  int64 timestamp = 3;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  bool re_register = 2; // If true, node must register again
+}
+
+message PollJobsRequest {
+  string worker_id = 1;
+  int32 max_jobs = 2;
+}
+
+message PollJobsResponse {
+  repeated Job jobs = 1;
+}
+
+message AcknowledgeJobRequest {
+  string job_id = 1;
+  string worker_id = 2;
+  JobStatus status = 3; // COMPLETED or DEAD
+  bytes result = 4; // Optional result/error details
+}
+
+message AcknowledgeJobResponse {
+  bool success = 1;
+}

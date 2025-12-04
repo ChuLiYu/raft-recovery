@@ -93,6 +93,14 @@ coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
+# 生成 Proto 代碼
+proto:
+	@echo "Generating protobuf code..."
+	protoc --go_out=. --go_opt=paths=source_relative \
+    --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+    api/proto/v1/service.proto
+	@echo "Proto generation complete"
+
 # 幫助信息
 help:
 	@echo "Beaver-Raft Makefile Commands:"
