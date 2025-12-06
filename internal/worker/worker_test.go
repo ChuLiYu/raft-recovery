@@ -35,13 +35,13 @@ func TestPoolStart(t *testing.T) {
 	pool := NewPool(10)
 
 	// Start 8 Workers
-	err := pool.Start(8)
+	err := pool.Start(8, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 8, pool.GetWorkerCount())
 	assert.True(t, pool.IsStarted())
 
 	// Try to start again
-	err = pool.Start(4)
+	err = pool.Start(4, nil)
 	assert.Error(t, err)
 
 	pool.Stop()
@@ -50,7 +50,7 @@ func TestPoolStart(t *testing.T) {
 // TestWorkerExecution tests Worker job execution
 func TestWorkerExecution(t *testing.T) {
 	pool := NewPool(10)
-	err := pool.Start(1) // Single Worker
+	err := pool.Start(1, nil) // Single Worker
 	require.NoError(t, err)
 
 	// Submit 10 tasks
@@ -82,7 +82,7 @@ func TestWorkerExecution(t *testing.T) {
 // TestTimeout tests job timeout mechanism
 func TestTimeout(t *testing.T) {
 	pool := NewPool(10)
-	err := pool.Start(1)
+	err := pool.Start(1, nil)
 	require.NoError(t, err)
 
 	// Submit timeout task (with very short timeout)
@@ -116,7 +116,7 @@ func TestConcurrency(t *testing.T) {
 	workerCount := 8
 	taskCount := 100
 
-	err := pool.Start(workerCount)
+	err := pool.Start(workerCount, nil)
 	require.NoError(t, err)
 
 	start := time.Now()
@@ -162,7 +162,7 @@ func TestConcurrency(t *testing.T) {
 // TestConcurrentSubmit tests concurrent job submission
 func TestConcurrentSubmit(t *testing.T) {
 	pool := NewPool(100)
-	err := pool.Start(4)
+	err := pool.Start(4, nil)
 	require.NoError(t, err)
 
 	taskCount := 50
@@ -201,7 +201,7 @@ func TestConcurrentSubmit(t *testing.T) {
 // TestGracefulShutdown tests graceful shutdown
 func TestGracefulShutdown(t *testing.T) {
 	pool := NewPool(50)
-	err := pool.Start(4)
+	err := pool.Start(4, nil)
 	require.NoError(t, err)
 
 	// Submit 50 tasks
@@ -253,7 +253,7 @@ func TestStopBeforeStart(t *testing.T) {
 // TestSubmitAfterStop tests submitting jobs after shutdown
 func TestSubmitAfterStop(t *testing.T) {
 	pool := NewPool(10)
-	err := pool.Start(2)
+	err := pool.Start(2, nil)
 	require.NoError(t, err)
 
 	pool.Stop()
@@ -279,7 +279,7 @@ func TestChannelBuffer(t *testing.T) {
 	pool := NewPool(bufferSize)
 
 	// Start 1 Worker, let it process slowly
-	err := pool.Start(1)
+	err := pool.Start(1, nil)
 	require.NoError(t, err)
 
 	// Quickly submit more tasks than buffer size
@@ -331,7 +331,7 @@ func TestSubmitBeforeStart(t *testing.T) {
 // TestReceiveResultAfterStop tests receiving results after shutdown
 func TestReceiveResultAfterStop(t *testing.T) {
 	pool := NewPool(10)
-	err := pool.Start(2)
+	err := pool.Start(2, nil)
 	require.NoError(t, err)
 
 	pool.Stop()
@@ -401,7 +401,7 @@ func TestWorkerExecuteTimeout(t *testing.T) {
 // BenchmarkPoolSubmit tests job submission performance
 func BenchmarkPoolSubmit(b *testing.B) {
 	pool := NewPool(1000)
-	pool.Start(8)
+	pool.Start(8, nil)
 	defer pool.Stop()
 
 	b.ResetTimer()
@@ -418,7 +418,7 @@ func BenchmarkPoolSubmit(b *testing.B) {
 // BenchmarkPoolThroughput tests throughput
 func BenchmarkPoolThroughput(b *testing.B) {
 	pool := NewPool(1000)
-	pool.Start(8)
+	pool.Start(8, nil)
 	defer pool.Stop()
 
 	// Receive results in background
