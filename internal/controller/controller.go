@@ -76,6 +76,9 @@ type Config struct {
 	// WAL batch commit settings (NEW!)
 	WALBufferSize    int           // Max events per batch (e.g., 100)
 	WALFlushInterval time.Duration // Max time between flushes (e.g., 10ms)
+	
+	// Phase 2: Distributed Mode Settings
+	DisableDispatchLoop bool // If true, internal dispatch loops are disabled (for Master node)
 }
 
 // Controller is the core controller
@@ -179,19 +182,32 @@ func (c *Controller) Start() error {
 		"requeued_jobs", requeueCount)
 
 	// 2. Start Worker Pool
-	if err := c.pool.Start(c.config.WorkerCount); err != nil {
+	if err := c.pool.Start(c.config.WorkerCount, nil); err != nil {
 		return fmt.Errorf("failed to start worker pool: %w", err)
 	}
 
-	// 3. Start four core loops
-	c.loopWg.Add(4)
-	go c.dispatchLoop()
+	// 3. Start core loops
+	// If DisableDispatchLoop is true (Master mode), we skip starting local dispatchers.
+	// The Controller will purely act as a passive backend for gRPC requests.
+	numDispatchers := 0
+	if !c.config.DisableDispatchLoop {
+		numDispatchers = 4 // Default parallel dispatchers for local mode
+	}
+	
+	c.loopWg.Add(3 + numDispatchers) // result + timeout + snapshot + N*dispatch
+
+	// Start multiple dispatch loops in parallel (only if enabled)
+	for i := 0; i < numDispatchers; i++ {
+		go c.dispatchLoop()
+	}
+
 	go c.resultLoop()
 	go c.timeoutLoop()
 	go c.snapshotLoop()
 
 	log.Info("Controller started",
-		"workers", c.config.WorkerCount)
+		"workers", c.config.WorkerCount,
+		"dispatchers", numDispatchers)
 	return nil
 }
 
@@ -290,56 +306,68 @@ func (c *Controller) replayWAL() error {
 func (c *Controller) dispatchLoop() {
 	defer c.loopWg.Done()
 
+	// Batch size: Pop multiple jobs at once to reduce lock contention
+	const batchSize = 10
+
 	for {
 		select {
 		case <-c.stopCh:
 			log.Info("Dispatch loop stopped")
 			return
 		default:
-			// Continuous dispatching (no artificial delay)
-			// Pop a pending task
+			// Batch pop jobs to reduce lock acquisition frequency
 			c.mu.Lock()
-			job := c.jobManager.PopPending()
+			jobs := make([]*types.Job, 0, batchSize)
+			for i := 0; i < batchSize; i++ {
+				job := c.jobManager.PopPending()
+				if job == nil {
+					break
+				}
+				jobs = append(jobs, job)
+			}
 			c.mu.Unlock()
 
-			if job == nil {
+			if len(jobs) == 0 {
 				// No jobs available, sleep briefly to avoid busy-wait
 				select {
 				case <-c.stopCh:
 					log.Info("Dispatch loop stopped")
 					return
-				case <-time.After(10 * time.Millisecond): // Short sleep when idle
+				case <-time.After(5 * time.Millisecond): // Shorter sleep for faster response
 					continue
 				}
 			}
 
-			// Write to WAL first (Write-Ahead)
-			if err := c.wal.Append(wal.EventDispatch, job); err != nil {
-				log.Error("Failed to append DISPATCH event", "error", err)
-				continue
+			// Phase 1: WAL writes (parallel-safe, no lock)
+			for _, job := range jobs {
+				if err := c.wal.Append(wal.EventDispatch, job); err != nil {
+					log.Error("Failed to append DISPATCH event", "error", err)
+				}
 			}
 
-			// Mark as in-flight
+			// Phase 2: Batch mark in-flight (single lock acquisition)
 			deadline := time.Now().Add(c.config.TaskTimeout)
 			c.mu.Lock()
-			if err := c.jobManager.MarkInFlight(job.ID, deadline); err != nil {
-				log.Error("Failed to mark in-flight", "error", err)
-				c.mu.Unlock()
-				continue
+			for _, job := range jobs {
+				if err := c.jobManager.MarkInFlight(job.ID, deadline); err != nil {
+					log.Error("Failed to mark in-flight", "error", err)
+				}
 			}
 			c.mu.Unlock()
 
-			// Submit to Worker Pool
-			task := worker.Task{
-				ID:      job.ID,
-				Payload: job.Payload,
-				Timeout: c.config.TaskTimeout,
-			}
+			// Phase 3: Submit to Worker Pool (thread-safe)
+			for _, job := range jobs {
+				task := worker.Task{
+					ID:      job.ID,
+					Payload: job.Payload,
+					Timeout: c.config.TaskTimeout,
+				}
 
-			if err := c.pool.Submit(task); err != nil {
-				// Pool may be closed, which is normal (during Stop process)
-				if err != worker.ErrPoolClosed {
-					log.Error("Failed to submit task", "error", err)
+				if err := c.pool.Submit(task); err != nil {
+					// Pool may be closed, which is normal (during Stop process)
+					if err != worker.ErrPoolClosed {
+						log.Error("Failed to submit task", "error", err)
+					}
 				}
 			}
 		}
@@ -465,7 +493,7 @@ func (c *Controller) timeoutLoop() {
 					if err := c.jobManager.MarkDead(jobID); err != nil {
 						log.Error("Failed to mark dead", "error", err)
 					}
-					log.Warn("Job timeout and marked as dead",
+					log.Debug("Job timeout and marked as dead",
 						"jobID", jobID)
 				} else {
 					// Requeue
@@ -623,6 +651,13 @@ func (c *Controller) GetStats() map[string]int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.jobManager.Stats()
+}
+
+// GetTotalJobs returns the total number of jobs in the system
+func (c *Controller) GetTotalJobs() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.jobManager.GetTotalJobs()
 }
 
 func (c *Controller) Stop() {
