@@ -153,6 +153,7 @@ type WAL struct {
 	flushInterval time.Duration     // Max time between flushes
 	closed        chan struct{}     // Close signal
 	wg            sync.WaitGroup    // Wait for batch writer to finish
+	isClosed      bool              // Flag to prevent double close/rotate
 
 	// Legacy fields (for backward compatibility during migration)
 	buffer        []Event   // Batch write event buffer
@@ -361,6 +362,14 @@ func (w *WAL) Replay(handler func(event *Event) error) error {
 //
 //	error (if rotation fails)
 func (w *WAL) Rotate() error {
+	w.mu.Lock()
+	if w.isClosed {
+		w.mu.Unlock()
+		return fmt.Errorf("WAL is closed or rotating")
+	}
+	w.isClosed = true
+	w.mu.Unlock()
+
 	// Stop batch writer temporarily
 	close(w.closed)
 	w.wg.Wait()
@@ -369,6 +378,8 @@ func (w *WAL) Rotate() error {
 	defer w.mu.Unlock()
 
 	if err := w.file.Close(); err != nil {
+		// Attempt to restore state if possible, or leave it broken
+		// Ideally we should restart writer, but simple for now
 		return err
 	}
 
@@ -392,6 +403,8 @@ func (w *WAL) Rotate() error {
 	w.closed = make(chan struct{})
 	w.wg.Add(1)
 	go w.batchWriter()
+	
+	w.isClosed = false // Restore available state
 
 	return nil
 }
@@ -468,6 +481,14 @@ func (w *WAL) flushBatch(batch []batchRequest) {
 // Close closes the WAL gracefully
 // Ensures all pending batches are flushed before closing
 func (w *WAL) Close() error {
+	w.mu.Lock()
+	if w.isClosed {
+		w.mu.Unlock()
+		return nil // Already closed
+	}
+	w.isClosed = true
+	w.mu.Unlock()
+
 	// Signal shutdown to batch writer
 	close(w.closed)
 

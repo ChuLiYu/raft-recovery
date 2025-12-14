@@ -86,19 +86,26 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	pb "github.com/ChuLiYu/raft-recovery/api/proto/v1"
 	"github.com/ChuLiYu/raft-recovery/internal/controller"
+	"github.com/ChuLiYu/raft-recovery/internal/server"
+	"github.com/ChuLiYu/raft-recovery/internal/worker"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
 )
 
@@ -158,26 +165,84 @@ func BuildCLI() *cobra.Command {
 }
 
 func buildRunCommand() *cobra.Command {
+	var mode string
+	var port int
+	var masterAddr string
+
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Start the Beaver-Raft queue system",
-		Long:  "Start the controller with WAL, snapshot, and worker pool",
+		Long:  "Start the system in standalone, master, or worker mode",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runController()
+			return runSystem(mode, port, masterAddr)
 		},
 	}
+
+	cmd.Flags().StringVar(&mode, "mode", "standalone", "System mode: standalone, master, worker")
+	cmd.Flags().IntVar(&port, "port", 50051, "Port to listen on (master mode)")
+	cmd.Flags().StringVar(&masterAddr, "master", "", "Master address (worker mode)")
+
 	return cmd
 }
 
-func runController() error {
+func runSystem(mode string, port int, masterAddr string) error {
 	cfg, err := loadConfig(configFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	log.Printf("Starting Beaver-Raft with config: %s\n", configFile)
+	log.Printf("Starting Beaver-Raft in %s mode\n", mode)
+
+	if mode == "worker" {
+		return runWorkerNode(cfg, masterAddr)
+	}
+
+	// Master or Standalone Mode
+	return runControllerNode(cfg, mode, port)
+}
+
+func runWorkerNode(cfg *Config, masterAddr string) error {
+	if masterAddr == "" {
+		return fmt.Errorf("master address is required in worker mode")
+	}
+
+	log.Printf("Connecting to master at %s...\n", masterAddr)
+	
+	conn, err := grpc.NewClient(masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("failed to connect to master: %w", err)
+	}
+	defer conn.Close()
+
+	// Create Worker Pool
+	pool := worker.NewPool(100)
+	
+	// Create JobSource (gRPC)
+	workerID := fmt.Sprintf("worker-%d", time.Now().UnixNano())
+	source := worker.NewGrpcJobSource(conn, workerID, "") // Address is optional for now
+
+	// Start Worker Pool with Pull Mode
+	log.Printf("Starting %d workers...\n", cfg.Worker.WorkerCount)
+	if err := pool.Start(cfg.Worker.WorkerCount, source); err != nil {
+		return fmt.Errorf("failed to start worker pool: %w", err)
+	}
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	log.Println("Stopping worker node...")
+	pool.Stop()
+	return nil
+}
+
+func runControllerNode(cfg *Config, mode string, port int) error {
+	log.Printf("Starting Controller with config: %s\n", configFile)
 	log.Printf("Workers: %d, Timeout: %s\n", cfg.Worker.WorkerCount, cfg.Worker.TaskTimeout)
 
+	// If running in distributed Master mode, disable internal dispatch loops to avoid stealing jobs from remote workers.
+	// This is critical for correct distributed operation (see PHASE2_DEBUG_REPORT.md).
 	ctrlConfig := controller.Config{
 		WorkerCount:      cfg.Worker.WorkerCount,
 		TaskTimeout:      cfg.Worker.TaskTimeout,
@@ -187,6 +252,7 @@ func runController() error {
 		SnapshotPath:     cfg.Snapshot.Dir,
 		WALBufferSize:    cfg.WAL.BufferSize,
 		WALFlushInterval: time.Duration(cfg.WAL.FlushIntervalMs) * time.Millisecond,
+		DisableDispatchLoop: mode == "master", // <-- Key fix: disables local dispatchers in Master mode
 	}
 
 	ctrl, err := controller.NewController(ctrlConfig)
@@ -196,6 +262,7 @@ func runController() error {
 
 	globalCtrl = ctrl
 
+	// Start Metrics
 	if cfg.Metrics.Enabled {
 		go func() {
 			http.Handle("/metrics", promhttp.Handler())
@@ -207,11 +274,32 @@ func runController() error {
 		}()
 	}
 
+	// Start Controller
 	if err := ctrl.Start(); err != nil {
 		return fmt.Errorf("failed to start controller: %w", err)
 	}
 
-	log.Println("Controller started successfully")
+	// If Master mode, start gRPC server
+	if mode == "master" {
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			return fmt.Errorf("failed to listen on port %d: %w", port, err)
+		}
+		
+		grpcServer := grpc.NewServer()
+		srv := server.NewServer(ctrl)
+		pb.RegisterFalconQueueServiceServer(grpcServer, srv)
+		
+		log.Printf("gRPC Server listening on :%d\n", port)
+		
+		go func() {
+			if err := grpcServer.Serve(lis); err != nil {
+				log.Fatalf("gRPC server failed: %v", err)
+			}
+		}()
+	}
+
+	log.Println("System started successfully")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -221,32 +309,34 @@ func runController() error {
 
 	ctrl.Stop()
 
-	log.Println("Controller stopped. Goodbye!")
+	log.Println("System stopped. Goodbye!")
 	return nil
 }
 
 func buildEnqueueCommand() *cobra.Command {
 	var jobFile string
+	var masterAddr string
 
 	cmd := &cobra.Command{
 		Use:   "enqueue",
 		Short: "Enqueue jobs from a JSON file",
-		Long:  "Read job definitions from a JSON file and enqueue them",
+		Long:  "Read job definitions from a JSON file and enqueue them. Use --master to submit to a remote master.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if jobFile == "" {
 				return fmt.Errorf("job file is required (use --file or -f)")
 			}
-			return enqueueJobs(jobFile)
+			return enqueueJobs(jobFile, masterAddr)
 		},
 	}
 
 	cmd.Flags().StringVarP(&jobFile, "file", "f", "", "JSON file containing job definitions")
+	cmd.Flags().StringVar(&masterAddr, "master", "", "Master address (e.g. localhost:50051) for remote submission")
 	cmd.MarkFlagRequired("file")
 
 	return cmd
 }
 
-func enqueueJobs(filePath string) error {
+func enqueueJobs(filePath string, masterAddr string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read job file: %w", err)
@@ -262,6 +352,43 @@ func enqueueJobs(filePath string) error {
 		return fmt.Errorf("failed to parse job file: %w", err)
 	}
 
+	// Mode 1: Remote Submission (gRPC)
+	if masterAddr != "" {
+		conn, err := grpc.NewClient(masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("failed to connect to master: %w", err)
+		}
+		defer conn.Close()
+
+		client := pb.NewFalconQueueServiceClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		successCount := 0
+		for _, j := range jobsInput {
+			payloadBytes, _ := json.Marshal(j.Payload)
+			req := &pb.SubmitJobRequest{
+				JobId:     j.ID,
+				Payload:   payloadBytes,
+				TimeoutMs: j.Timeout,
+			}
+			
+			resp, err := client.SubmitJob(ctx, req)
+			if err != nil {
+				log.Printf("Failed to submit job %s: %v\n", j.ID, err)
+				continue
+			}
+			if !resp.Success {
+				log.Printf("Master rejected job %s: %s\n", j.ID, resp.ErrorMessage)
+				continue
+			}
+			successCount++
+		}
+		log.Printf("Successfully submitted %d/%d jobs to %s\n", successCount, len(jobsInput), masterAddr)
+		return nil
+	}
+
+	// Mode 2: Local Submission (Direct Controller)
 	if globalCtrl == nil {
 		cfg, err := loadConfig(configFile)
 		if err != nil {
@@ -299,12 +426,12 @@ func enqueueJobs(filePath string) error {
 		})
 	}
 
-	log.Printf("Enqueuing %d jobs from %s\n", len(jobs), filePath)
+	log.Printf("Enqueuing %d jobs from %s locally\n", len(jobs), filePath)
 	if err := globalCtrl.EnqueueJobs(jobs); err != nil {
 		return fmt.Errorf("failed to enqueue jobs: %w", err)
 	}
 
-	log.Printf("Successfully enqueued %d jobs\n", len(jobs))
+	log.Printf("Successfully enqueued %d jobs locally\n", len(jobs))
 	return nil
 }
 
