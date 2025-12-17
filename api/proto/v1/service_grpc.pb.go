@@ -24,6 +24,8 @@ const (
 	FalconQueueService_SendHeartbeat_FullMethodName  = "/v1.FalconQueueService/SendHeartbeat"
 	FalconQueueService_PollJobs_FullMethodName       = "/v1.FalconQueueService/PollJobs"
 	FalconQueueService_AcknowledgeJob_FullMethodName = "/v1.FalconQueueService/AcknowledgeJob"
+	FalconQueueService_RequestVote_FullMethodName    = "/v1.FalconQueueService/RequestVote"
+	FalconQueueService_AppendEntries_FullMethodName  = "/v1.FalconQueueService/AppendEntries"
 )
 
 // FalconQueueServiceClient is the client API for FalconQueueService service.
@@ -39,6 +41,9 @@ type FalconQueueServiceClient interface {
 	SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	PollJobs(ctx context.Context, in *PollJobsRequest, opts ...grpc.CallOption) (*PollJobsResponse, error)
 	AcknowledgeJob(ctx context.Context, in *AcknowledgeJobRequest, opts ...grpc.CallOption) (*AcknowledgeJobResponse, error)
+	// Raft Consensus
+	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
+	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
 }
 
 type falconQueueServiceClient struct {
@@ -99,6 +104,26 @@ func (c *falconQueueServiceClient) AcknowledgeJob(ctx context.Context, in *Ackno
 	return out, nil
 }
 
+func (c *falconQueueServiceClient) RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestVoteResponse)
+	err := c.cc.Invoke(ctx, FalconQueueService_RequestVote_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *falconQueueServiceClient) AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AppendEntriesResponse)
+	err := c.cc.Invoke(ctx, FalconQueueService_AppendEntries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FalconQueueServiceServer is the server API for FalconQueueService service.
 // All implementations must embed UnimplementedFalconQueueServiceServer
 // for forward compatibility.
@@ -112,6 +137,9 @@ type FalconQueueServiceServer interface {
 	SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	PollJobs(context.Context, *PollJobsRequest) (*PollJobsResponse, error)
 	AcknowledgeJob(context.Context, *AcknowledgeJobRequest) (*AcknowledgeJobResponse, error)
+	// Raft Consensus
+	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
+	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
 	mustEmbedUnimplementedFalconQueueServiceServer()
 }
 
@@ -136,6 +164,12 @@ func (UnimplementedFalconQueueServiceServer) PollJobs(context.Context, *PollJobs
 }
 func (UnimplementedFalconQueueServiceServer) AcknowledgeJob(context.Context, *AcknowledgeJobRequest) (*AcknowledgeJobResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AcknowledgeJob not implemented")
+}
+func (UnimplementedFalconQueueServiceServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestVote not implemented")
+}
+func (UnimplementedFalconQueueServiceServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AppendEntries not implemented")
 }
 func (UnimplementedFalconQueueServiceServer) mustEmbedUnimplementedFalconQueueServiceServer() {}
 func (UnimplementedFalconQueueServiceServer) testEmbeddedByValue()                            {}
@@ -248,6 +282,42 @@ func _FalconQueueService_AcknowledgeJob_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FalconQueueService_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestVoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FalconQueueServiceServer).RequestVote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FalconQueueService_RequestVote_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FalconQueueServiceServer).RequestVote(ctx, req.(*RequestVoteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FalconQueueService_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AppendEntriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FalconQueueServiceServer).AppendEntries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FalconQueueService_AppendEntries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FalconQueueServiceServer).AppendEntries(ctx, req.(*AppendEntriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FalconQueueService_ServiceDesc is the grpc.ServiceDesc for FalconQueueService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -274,6 +344,14 @@ var FalconQueueService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AcknowledgeJob",
 			Handler:    _FalconQueueService_AcknowledgeJob_Handler,
+		},
+		{
+			MethodName: "RequestVote",
+			Handler:    _FalconQueueService_RequestVote_Handler,
+		},
+		{
+			MethodName: "AppendEntries",
+			Handler:    _FalconQueueService_AppendEntries_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
