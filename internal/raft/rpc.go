@@ -80,9 +80,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
 	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.state = Follower
-		rf.votedFor = ""
+		rf.convertToFollower(args.Term)
 	}
 
 	// Valid leader detected, reset timer
@@ -90,19 +88,56 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.leaderID = args.LeaderID
 
 	// 2. Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
-	// TODO: Implement log check
+	lastIndex, _ := rf.logStore.LastIndex()
+	if args.PrevLogIndex > lastIndex {
+		return
+	}
+
+	if args.PrevLogIndex >= 0 {
+		prevEntry, err := rf.logStore.GetLog(args.PrevLogIndex)
+		if err == nil && prevEntry.Term != args.PrevLogTerm {
+			return
+		}
+	}
 
 	// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
-	// TODO: Implement log conflict resolution
-
-	// 4. Append any new entries not already in the log
-	// TODO: Append entries
+	for i, entry := range args.Entries {
+		if entry.Index <= lastIndex {
+			existing, err := rf.logStore.GetLog(entry.Index)
+			if err == nil && existing.Term != entry.Term {
+				rf.logStore.DeleteRange(entry.Index, lastIndex)
+				// Update lastIndex after deletion
+				lastIndex = entry.Index - 1
+			} else if err == nil {
+				// Terms match, skip this entry
+				continue
+			}
+		}
+		
+		// 4. Append any new entries not already in the log
+		rf.logStore.StoreLogs(sliceToPointers(args.Entries[i:]))
+		break
+	}
 
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		// rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIndex())
-		rf.commitIndex = args.LeaderCommit // Simplified for now
+		newLastIndex, _ := rf.logStore.LastIndex()
+		if args.LeaderCommit < newLastIndex {
+			rf.commitIndex = args.LeaderCommit
+		} else {
+			rf.commitIndex = newLastIndex
+		}
+		// Signal applier to apply new committed entries
+		go rf.applyLogs()
 	}
 
 	reply.Success = true
+}
+
+func sliceToPointers(entries []LogEntry) []*LogEntry {
+	res := make([]*LogEntry, len(entries))
+	for i := range entries {
+		res[i] = &entries[i]
+	}
+	return res
 }
