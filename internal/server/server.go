@@ -9,6 +9,7 @@ import (
 
 	pb "github.com/ChuLiYu/raft-recovery/api/proto/v1"
 	"github.com/ChuLiYu/raft-recovery/internal/controller"
+	"github.com/ChuLiYu/raft-recovery/internal/raft"
 	"github.com/ChuLiYu/raft-recovery/internal/worker"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
@@ -18,6 +19,7 @@ type Server struct {
 	pb.UnimplementedFalconQueueServiceServer
 
 	controller *controller.Controller
+	raftNode   *raft.Raft
 	
 	// Worker Registry
 	mu       sync.RWMutex
@@ -35,11 +37,67 @@ type WorkerInfo struct {
 }
 
 // NewServer creates a new gRPC server instance.
-func NewServer(ctrl *controller.Controller) *Server {
+func NewServer(ctrl *controller.Controller, rf *raft.Raft) *Server {
 	return &Server{
 		controller: ctrl,
+		raftNode:   rf,
 		workers:    make(map[string]*WorkerInfo),
 	}
+}
+
+// RequestVote handles Raft RequestVote RPC
+func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
+	if s.raftNode == nil {
+		return nil, fmt.Errorf("raft node not initialized")
+	}
+
+	args := &raft.RequestVoteArgs{
+		Term:         req.Term,
+		CandidateID:  req.CandidateId,
+		LastLogIndex: req.LastLogIndex,
+		LastLogTerm:  req.LastLogTerm,
+	}
+	
+	reply := &raft.RequestVoteReply{}
+	s.raftNode.RequestVote(args, reply)
+	
+	return &pb.RequestVoteResponse{
+		Term:        reply.Term,
+		VoteGranted: reply.VoteGranted,
+	}, nil
+}
+
+// AppendEntries handles Raft AppendEntries RPC
+func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error) {
+	if s.raftNode == nil {
+		return nil, fmt.Errorf("raft node not initialized")
+	}
+
+	entries := make([]raft.LogEntry, len(req.Entries))
+	for i, e := range req.Entries {
+		entries[i] = raft.LogEntry{
+			Term:    e.Term,
+			Index:   e.Index,
+			Command: e.Command,
+		}
+	}
+
+	args := &raft.AppendEntriesArgs{
+		Term:         req.Term,
+		LeaderID:     req.LeaderId,
+		PrevLogIndex: req.PrevLogIndex,
+		PrevLogTerm:  req.PrevLogTerm,
+		Entries:      entries,
+		LeaderCommit: req.LeaderCommit,
+	}
+	
+	reply := &raft.AppendEntriesReply{}
+	s.raftNode.AppendEntries(args, reply)
+	
+	return &pb.AppendEntriesResponse{
+		Term:    reply.Term,
+		Success: reply.Success,
+	}, nil
 }
 
 // SubmitJob handles job submission from clients.

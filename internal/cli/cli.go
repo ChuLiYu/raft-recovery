@@ -287,7 +287,8 @@ func runControllerNode(cfg *Config, mode string, port int) error {
 		}
 		
 		grpcServer := grpc.NewServer()
-		srv := server.NewServer(ctrl)
+		// TODO: Initialize Raft node for Phase 3
+		srv := server.NewServer(ctrl, nil)
 		pb.RegisterFalconQueueServiceServer(grpcServer, srv)
 		
 		log.Printf("gRPC Server listening on :%d\n", port)

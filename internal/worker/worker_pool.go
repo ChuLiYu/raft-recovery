@@ -67,7 +67,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 

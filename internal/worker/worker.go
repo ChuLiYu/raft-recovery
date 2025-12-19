@@ -54,7 +54,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"time"
 )

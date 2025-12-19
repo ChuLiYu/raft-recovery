@@ -581,3 +581,15 @@ func (jm *JobManager) GetJob(jobID types.JobID) *types.Job {
 	defer jm.mu.RUnlock()
 	return jm.jobs[jobID]
 }
+
+// GetTotalJobs returns the total number of jobs
+//
+// Returns:
+//   - int: Total job count
+//
+// Concurrency: Protected by read lock
+func (jm *JobManager) GetTotalJobs() int {
+	jm.mu.RLock()
+	defer jm.mu.RUnlock()
+	return len(jm.jobs)
+}
