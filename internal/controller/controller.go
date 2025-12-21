@@ -47,12 +47,14 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/ChuLiYu/raft-recovery/internal/jobmanager"
+	"github.com/ChuLiYu/raft-recovery/internal/raft"
 	"github.com/ChuLiYu/raft-recovery/internal/snapshot"
 	"github.com/ChuLiYu/raft-recovery/internal/storage/wal"
 	"github.com/ChuLiYu/raft-recovery/internal/worker"
@@ -93,6 +95,10 @@ type Controller struct {
 	stopped    bool                   // Flag indicating if stopped
 	startTime  time.Time              // Start time (for statistics)
 	loopWg     sync.WaitGroup         // Wait for all loops to exit
+	
+	// Phase 3: Raft integration
+	applyCh    chan raft.ApplyMsg     // Channel for committed entries
+	raftNode   *raft.Raft             // Raft node instance
 }
 
 // ============================================================================
@@ -139,7 +145,15 @@ func NewController(config Config) (*Controller, error) {
 		pool:       pool,
 		config:     config,
 		stopCh:     make(chan struct{}),
+		applyCh:    make(chan raft.ApplyMsg, 100),
 	}, nil
+}
+
+// SetRaftNode injects the Raft node instance
+func (c *Controller) SetRaftNode(rf *raft.Raft) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.raftNode = rf
 }
 
 // Start starts the Controller
@@ -204,11 +218,81 @@ func (c *Controller) Start() error {
 	go c.resultLoop()
 	go c.timeoutLoop()
 	go c.snapshotLoop()
+	
+	// Phase 3: Start apply loop
+	c.loopWg.Add(1)
+	go c.applyLoop()
 
 	log.Info("Controller started",
 		"workers", c.config.WorkerCount,
 		"dispatchers", numDispatchers)
 	return nil
+}
+
+// applyLoop listens for committed entries from Raft and applies them to the state machine.
+func (c *Controller) applyLoop() {
+	defer c.loopWg.Done()
+	
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case msg := <-c.applyCh:
+			if msg.CommandValid {
+				c.handleRaftCommand(msg.Command)
+				c.jobManager.SetLastAppliedIndex(msg.CommandIndex)
+			}
+		}
+	}
+}
+
+func (c *Controller) handleRaftCommand(data []byte) {
+	var cmd raft.RaftCommand
+	if err := json.Unmarshal(data, &cmd); err != nil {
+		log.Error("Failed to unmarshal raft command", "error", err)
+		return
+	}
+	
+	switch cmd.Type {
+	case raft.CmdEnqueue:
+		var payload raft.EnqueuePayload
+		json.Unmarshal(cmd.Payload, &payload)
+		c.mu.Lock()
+		for _, job := range payload.Jobs {
+			// Idempotency: skip if already exists
+			if jobPtr := c.jobManager.GetJob(job.ID); jobPtr != nil {
+				continue
+			}
+			c.jobManager.Enqueue(job)
+		}
+		c.mu.Unlock()
+		log.Debug("Applied Enqueue command from Raft", "count", len(payload.Jobs))
+		
+	case raft.CmdAck:
+		var payload raft.AckPayload
+		json.Unmarshal(cmd.Payload, &payload)
+		c.mu.Lock()
+		// Idempotency: skip if already completed or dead
+		if c.jobManager.IsCompleted(types.JobID(payload.JobID)) || c.jobManager.IsDead(types.JobID(payload.JobID)) {
+			c.mu.Unlock()
+			return
+		}
+		
+		job := c.jobManager.GetJob(types.JobID(payload.JobID))
+		if job != nil {
+			if payload.Status == types.StatusCompleted {
+				c.jobManager.MarkCompleted(job.ID)
+			} else {
+				c.jobManager.MarkDead(job.ID)
+			}
+		}
+		c.mu.Unlock()
+		log.Debug("Applied Ack command from Raft", "jobID", payload.JobID)
+	}
+}
+
+func (c *Controller) GetApplyCh() chan raft.ApplyMsg {
+	return c.applyCh
 }
 
 // loadSnapshot restores state from snapshot
@@ -536,22 +620,38 @@ func (c *Controller) takeSnapshot() error {
 
 	// Phase 1: Quickly copy state with minimal lock hold time
 	c.mu.Lock()
-	data := c.jobManager.Snapshot()
-	data.LastSeq = c.wal.GetLastSeq()
+	var data types.SnapshotData
+	
+	// Beaver Logic: Use PartialSnapshot if Raft is enabled, otherwise Full Snapshot
+	if c.raftNode != nil {
+		data = c.jobManager.PartialSnapshot()
+		// Metadata for Raft
+		data.LastSeq = uint64(c.jobManager.GetLastAppliedIndex()) // We'll need this helper
+	} else {
+		data = c.jobManager.Snapshot()
+		data.LastSeq = c.wal.GetLastSeq()
+	}
+	raftPtr := c.raftNode
 	c.mu.Unlock()
 
 	// Phase 2: Write to disk (no lock, runs async)
-	// This allows dispatch/enqueue to continue during disk I/O
+	snapshotBytes, _ := json.Marshal(data)
 	if err := c.snapshot.Write(data); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
-	// Phase 3: Rotate WAL (thread-safe operation)
+	// Phase 3: Notify Raft for log compaction (if enabled)
+	if raftPtr != nil {
+		raftPtr.Snapshot(int64(data.LastSeq), snapshotBytes)
+	}
+
+	// Phase 4: Rotate WAL (thread-safe operation)
+	// For Raft mode, we might not need WAL rotation the same way, but keeping it for now
 	if err := c.wal.Rotate(); err != nil {
 		return fmt.Errorf("failed to rotate WAL: %w", err)
 	}
 
-	log.Info("Snapshot taken",
+	log.Info("Snapshot taken (Partial)",
 		"duration", time.Since(start),
 		"jobs", len(data.Jobs))
 

@@ -90,6 +90,23 @@ type JobManager struct {
 	inFlight  map[types.JobID]*types.Job // Executing jobs
 	completed map[types.JobID]*types.Job // Completed jobs
 	dead      map[types.JobID]*types.Job // Dead letter jobs
+	
+	// Phase 3: Raft integration
+	lastAppliedIndex int64
+}
+
+// ... NewJobManager initialization ...
+
+func (jm *JobManager) SetLastAppliedIndex(index int64) {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	jm.lastAppliedIndex = index
+}
+
+func (jm *JobManager) GetLastAppliedIndex() int64 {
+	jm.mu.RLock()
+	defer jm.mu.RUnlock()
+	return jm.lastAppliedIndex
 }
 
 // SnapShotData contains complete job state for persistence
@@ -116,11 +133,12 @@ type SnapShotData struct {
 // Concurrency: Returned instance is thread-safe
 func NewJobManager() *JobManager {
 	return &JobManager{
-		jobs:      make(map[types.JobID]*types.Job),
-		queue:     make([]types.JobID, 0),
-		inFlight:  make(map[types.JobID]*types.Job),
-		completed: make(map[types.JobID]*types.Job),
-		dead:      make(map[types.JobID]*types.Job),
+		jobs:             make(map[types.JobID]*types.Job),
+		queue:            make([]types.JobID, 0),
+		inFlight:         make(map[types.JobID]*types.Job),
+		completed:        make(map[types.JobID]*types.Job),
+		dead:             make(map[types.JobID]*types.Job),
+		lastAppliedIndex: 0,
 	}
 }
 
@@ -528,6 +546,28 @@ func (jm *JobManager) Snapshot() types.SnapshotData {
 	return types.SnapshotData{
 		Jobs:      jobsCopy,
 		SchemaVer: 1,
+	}
+}
+
+// PartialSnapshot generates a smaller snapshot containing only essential state
+// Content: Pending and In-Flight jobs. Skips Completed and Dead jobs.
+func (jm *JobManager) PartialSnapshot() types.SnapshotData {
+	jm.mu.RLock()
+	defer jm.mu.RUnlock()
+
+	jobsCopy := make(map[types.JobID]*types.Job)
+	
+	// Only copy active jobs
+	for id, job := range jm.jobs {
+		if job.Status == types.StatusPending || job.Status == types.StatusInFlight {
+			jobCopy := *job
+			jobsCopy[id] = &jobCopy
+		}
+	}
+
+	return types.SnapshotData{
+		Jobs:      jobsCopy,
+		SchemaVer: 2, // New schema for partial snapshots
 	}
 }
 
