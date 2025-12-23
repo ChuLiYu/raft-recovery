@@ -128,7 +128,22 @@ func (s *Server) SubmitJob(ctx context.Context, req *pb.SubmitJobRequest) (*pb.S
 		UpdatedAt: time.Now().UnixMilli(),
 	}
 
-	// 2. Enqueue via Controller
+	// 2. Propose via Raft (Phase 3)
+	if s.raftNode != nil {
+		cmd, err := raft.NewEnqueueCommand([]types.Job{job})
+		if err != nil {
+			return &pb.SubmitJobResponse{Success: false, ErrorMessage: "Failed to encode command"}, nil
+		}
+		
+		_, _, isLeader := s.raftNode.Propose(cmd)
+		if !isLeader {
+			return &pb.SubmitJobResponse{Success: false, ErrorMessage: "Not the leader"}, nil
+		}
+		
+		return &pb.SubmitJobResponse{Success: true, JobId: jobID}, nil
+	}
+
+	// Fallback to local Enqueue if Raft not enabled (Standalone Mode)
 	if err := s.controller.EnqueueJobs([]types.Job{job}); err != nil {
 		return &pb.SubmitJobResponse{
 			Success:      false,
@@ -231,11 +246,25 @@ func (s *Server) PollJobs(ctx context.Context, req *pb.PollJobsRequest) (*pb.Pol
 func (s *Server) AcknowledgeJob(ctx context.Context, req *pb.AcknowledgeJobRequest) (*pb.AcknowledgeJobResponse, error) {
 	status := mapPbStatusToType(req.Status)
 	
+	// Phase 3: Propose via Raft
+	if s.raftNode != nil {
+		cmd, err := raft.NewAckCommand(req.JobId, status)
+		if err != nil {
+			return &pb.AcknowledgeJobResponse{Success: false}, nil
+		}
+		
+		_, _, isLeader := s.raftNode.Propose(cmd)
+		if !isLeader {
+			// In a real system, we might queue this until we become leader, or forward it
+			return &pb.AcknowledgeJobResponse{Success: false}, nil
+		}
+		
+		return &pb.AcknowledgeJobResponse{Success: true}, nil
+	}
+
 	result := &worker.Result{
 		JobID:    types.JobID(req.JobId),
 		Success:  status == types.StatusCompleted,
-		// Duration is not passed in request, strictly speaking we lose it here unless we change proto
-		// But for now it's fine.
 	}
 
 	if err := s.controller.Acknowledge(ctx, req.JobId, status, result); err != nil {
