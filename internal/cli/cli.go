@@ -99,6 +99,7 @@ import (
 
 	pb "github.com/ChuLiYu/raft-recovery/api/proto/v1"
 	"github.com/ChuLiYu/raft-recovery/internal/controller"
+	"github.com/ChuLiYu/raft-recovery/internal/raft"
 	"github.com/ChuLiYu/raft-recovery/internal/server"
 	"github.com/ChuLiYu/raft-recovery/internal/worker"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
@@ -136,6 +137,15 @@ type Config struct {
 		Enabled bool `yaml:"enabled"`
 		Port    int  `yaml:"port"`
 	} `yaml:"metrics"`
+
+	// Phase 3: Raft Configuration
+	Raft struct {
+		Enabled           bool          `yaml:"enabled"`
+		NodeID            string        `yaml:"node_id"`
+		Peers             []string      `yaml:"peers"`
+		ElectionTimeout   time.Duration `yaml:"election_timeout"`
+		HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
+	} `yaml:"raft"`
 }
 
 var (
@@ -279,6 +289,27 @@ func runControllerNode(cfg *Config, mode string, port int) error {
 		return fmt.Errorf("failed to start controller: %w", err)
 	}
 
+	var raftNode *raft.Raft
+	// Phase 3: Initialize Raft if enabled
+	if cfg.Raft.Enabled {
+		raftConfig := raft.Config{
+			ID:                cfg.Raft.NodeID,
+			Peers:             cfg.Raft.Peers,
+			ElectionTimeout:   cfg.Raft.ElectionTimeout,
+			HeartbeatInterval: cfg.Raft.HeartbeatInterval,
+		}
+		
+		store := raft.NewMemoryLogStore()
+		transport := raft.NewGrpcTransport()
+		applyCh := ctrl.GetApplyCh()
+		
+		raftNode = raft.NewRaft(raftConfig, store, transport, applyCh)
+		ctrl.SetRaftNode(raftNode)
+		
+		raftNode.Start()
+		log.Printf("Raft node %s started\n", cfg.Raft.NodeID)
+	}
+
 	// If Master mode, start gRPC server
 	if mode == "master" {
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
@@ -287,8 +318,7 @@ func runControllerNode(cfg *Config, mode string, port int) error {
 		}
 		
 		grpcServer := grpc.NewServer()
-		// TODO: Initialize Raft node for Phase 3
-		srv := server.NewServer(ctrl, nil)
+		srv := server.NewServer(ctrl, raftNode)
 		pb.RegisterFalconQueueServiceServer(grpcServer, srv)
 		
 		log.Printf("gRPC Server listening on :%d\n", port)
