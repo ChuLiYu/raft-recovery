@@ -1,8 +1,8 @@
 # Beaver-Raft Configuration
 
 worker:
-  worker_count: 100  # Increased from 8 to 100 for better throughput
-  task_timeout: 10s  # Increased timeout for safety
+  worker_count: 100 # Increased from 8 to 100 for better throughput
+  task_timeout: 10s # Increased timeout for safety
 
 wal:
   dir: "./data/wal/beaver-raft.wal"
@@ -10,8 +10,8 @@ wal:
   sync_interval: 10
   retention_seconds: 86400
   # Batch commit settings (NEW!)
-  buffer_size: 100           # Max events per batch (higher = better throughput)
-  flush_interval_ms: 10      # Max ms between flushes (lower = lower latency)
+  buffer_size: 100 # Max events per batch (higher = better throughput)
+  flush_interval_ms: 10 # Max ms between flushes (lower = lower latency)
 
 snapshot:
   dir: "./data/snapshot/beaver-raft.snap"

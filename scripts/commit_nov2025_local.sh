@@ -3,7 +3,7 @@
 # Batch commits for November documentation work - Local commits for GitHub activity
 # Time distribution: November 1-15, 2025
 
-cd /Users/liyu/Programing/Beaver-Raft
+cd /Users/liyu/repos/Beaver-Raft
 
 echo "🚀 Starting November commits..."
 

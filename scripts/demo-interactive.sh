@@ -10,7 +10,7 @@
 
 set -e
 
-PROJECT_ROOT="/Users/liyu/Programing/Beaver-Raft"
+PROJECT_ROOT="/Users/liyu/repos/Beaver-Raft"
 cd "$PROJECT_ROOT"
 
 # Color definitions

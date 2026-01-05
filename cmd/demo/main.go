@@ -88,7 +88,7 @@ func main() {
 			var jobs []types.Job
 			for i := 1; i <= 1000; i++ {
 				jobs = append(jobs, types.Job{
-					ID:      types.JobID(fmt.Sprintf("crash-demo-%03d-%d", i, timestamp)),
+					ID: types.JobID(fmt.Sprintf("crash-demo-%03d-%d", i, timestamp)),
 					Payload: map[string]interface{}{
 						"task":     fmt.Sprintf("job_%d", i),
 						"sleep_ms": 10, // Fast jobs: 10ms each
@@ -141,7 +141,7 @@ func main() {
 		time.Sleep(500 * time.Millisecond)
 
 		stats := ctrl.GetStats()
-		total := stats["pending"] + stats["in_flight"] + stats["completed"] + stats["dead"]
+		total := ctrl.GetTotalJobs()
 
 		fmt.Printf("\n📊 Immediate Status After Recovery:\n")
 		fmt.Printf("  Pending:   %d\n", stats["pending"])
