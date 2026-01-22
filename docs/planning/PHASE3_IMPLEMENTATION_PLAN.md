@@ -1,5 +1,11 @@
 # Phase 3: Beaver-Raft Implementation Plan (Consensus & Partial Snapshots)
 
+## 0. System Architecture & Terminology (Unified Branding)
+The system is unified under the name **raft-recovery**, composed of three distinct layers:
+1.  **Falcon Layer (Transport & Execution)**: Handles gRPC communication, Worker management, and job dispatch. (Formerly Phase 2)
+2.  **Beaver Layer (Storage & Consensus)**: Manages Raft consensus, WAL persistence, and Partial Snapshots. (Formerly Phase 3)
+3.  **Core Layer (State Machine)**: Orchestrates the `JobManager` state machine and Controller logic. (Formerly Phase 1)
+
 ## 1. Overview
 This document outlines the implementation steps for **Phase 3 (Beaver-Raft)**.
 The goal is to upgrade the Phase 2 "Master-Worker" system into a **Leader-Follower** cluster using the **Raft Consensus Algorithm**.

@@ -6,7 +6,8 @@ option go_package = "github.com/ChuLiYu/raft-recovery/api/proto/v1";
 
 import "google/protobuf/timestamp.proto";
 
-// FalconQueueService defines the RPC methods for the distributed queue system.
+// FalconQueueService defines the Transport Layer interface for the raft-recovery system.
+// It handles job submission, worker coordination, and Raft consensus RPCs.
 service FalconQueueService {
   // Job Management
   rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
