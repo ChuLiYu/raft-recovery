@@ -29,16 +29,16 @@
 
 ```mermaid
 graph TD
-    Client[客戶端] -->|gRPC| Falcon[**Falcon Layer (獵鷹層)**<br>傳輸與執行]
+    Client["客戶端"] -->|gRPC| Falcon["**Falcon Layer (獵鷹層)**<br>傳輸與執行"]
     
-    subgraph Node[raft-recovery 節點]
-        Falcon -->|提交提案| Beaver[**Beaver Layer (海狸層)**<br>共識與存儲]
-        Beaver -->|已提交日誌| Core[**Core Layer (核心層)**<br>狀態機]
+    subgraph Node["raft-recovery 節點"]
+        Falcon -->|提交提案| Beaver["**Beaver Layer (海狸層)**<br>共識與存儲"]
+        Beaver -->|已提交日誌| Core["**Core Layer (核心層)**<br>狀態機"]
         Core -->|派發任務| Falcon
     end
     
-    Beaver <-->|Raft 協議| Peers[集群對等節點]
-    Beaver -->|持久化| Disk[(WAL + 快照)]
+    Beaver <-->|Raft 協議| Peers["集群對等節點"]
+    Beaver -->|持久化| Disk[("WAL + 快照")]
 ```
 
 ### 分層職責
