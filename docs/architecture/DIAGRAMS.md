@@ -10,8 +10,8 @@ This diagram illustrates the high-level components and their interactions within
 ```mermaid
 graph TB
     subgraph External["External World"]
-        Client[Client App]
-        Prometheus[Prometheus]
+        Client["Client App"]
+        Prometheus["Prometheus"]
     end
 
     subgraph Cluster["raft-recovery Cluster"]
@@ -22,32 +22,32 @@ graph TB
             
             subgraph Falcon1["Falcon Layer (Transport)"]
                 style Falcon1 fill:#fff3e0,stroke:#ff6f00
-                RPC1[gRPC Server]
-                Worker1[Worker Pool]
+                RPC1["gRPC Server"]
+                Worker1["Worker Pool"]
             end
             
             subgraph Beaver1["Beaver Layer (Consensus)"]
                 style Beaver1 fill:#e8f5e9,stroke:#2e7d32
-                Raft1[Raft Module]
-                WAL1[Write-Ahead Log]
-                Snap1[Partial Snapshotter]
+                Raft1["Raft Module"]
+                WAL1["Write-Ahead Log"]
+                Snap1["Partial Snapshotter"]
             end
             
             subgraph Core1["Core Layer (FSM)"]
                 style Core1 fill:#f3e5f5,stroke:#7b1fa2
-                Ctrl1[Controller]
-                JM1[JobManager]
+                Ctrl1["Controller"]
+                JM1["JobManager"]
             end
         end
 
         subgraph Node2["Node 2 (Follower)"]
             style Node2 fill:#fafafa,stroke:#9e9e9e
-            Raft2[Raft Module]
+            Raft2["Raft Module"]
         end
         
         subgraph Node3["Node 3 (Follower)"]
             style Node3 fill:#fafafa,stroke:#9e9e9e
-            Raft3[Raft Module]
+            Raft3["Raft Module"]
         end
     end
 
