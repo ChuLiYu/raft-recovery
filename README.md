@@ -152,5 +152,5 @@ This project is deeply inspired by the following research:
   USENIX Annual Technical Conference (**USENIX ATC '14**).
 
 ---
-**Author**: [Your Name/GitHub]
+**Author**: [ChuLiYu/GitHub]
 *Built as a high-performance distributed systems project demonstrating cloud engineering competencies.*

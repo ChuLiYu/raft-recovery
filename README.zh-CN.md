@@ -152,5 +152,5 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件。
   USENIX Annual Technical Conference (**USENIX ATC '14**).
 
 ---
-**作者**: [Your Name/GitHub]
+**作者**: [ChuLiYu/GitHub]
 *作為一個展示雲端工程能力的高效能分散式系統專案而建。*
