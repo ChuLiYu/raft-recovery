@@ -7,9 +7,9 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Raft Consensus](https://img.shields.io/badge/consensus-Raft-orange.svg)](https://raft.github.io/)
 [![gRPC](https://img.shields.io/badge/transport-gRPC-blue.svg)](https://grpc.io/)
-[![OSDI '24](https://img.shields.io/badge/Paper-OSDI%20'24-bf2c24.svg)](https://www.usenix.org/conference/osdi24/presentation/yu-liangcheng)
+[![OSDI '24](https://img.shields.io/badge/Paper-OSDI%20'24-bf2c24.svg)](https://www.usenix.org/conference/osdi24/presentation/yu)
 
-> **A cloud-native implementation of the [Beaver](https://www.usenix.org/conference/osdi24/presentation/yu-liangcheng) partial snapshot protocol (OSDI '24), integrated with Raft consensus.**
+> **A cloud-native implementation of the [Beaver](https://www.usenix.org/conference/osdi24/presentation/yu) partial snapshot protocol (OSDI '24), integrated with Raft consensus.**
 
 **raft-recovery** attempts to bridge the gap between academic research and production engineering. It implements the core "Partial Snapshot" concept from the OSDI '24 paper within a fully functional distributed job queue system, achieving **sub-3s crash recovery** and **strong consistency**.
 
@@ -143,7 +143,7 @@ MIT License - see [LICENSE](LICENSE) file.
 
 This project is deeply inspired by the following research:
 
-- **[Beaver: Practical Partial Snapshots for Distributed Cloud Services](https://www.usenix.org/conference/osdi24/presentation/yu-liangcheng)**  
+- **[Beaver: Practical Partial Snapshots for Distributed Cloud Services](https://www.usenix.org/conference/osdi24/presentation/yu)**  
   *Liangcheng Yu, Haoran Zhang, Vincent Liu, Xiao Zhang, John Sonchack, Dan Ports.*  
   18th USENIX Symposium on Operating Systems Design and Implementation (**OSDI '24**).
 

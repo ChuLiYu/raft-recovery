@@ -7,9 +7,9 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Raft Consensus](https://img.shields.io/badge/consensus-Raft-orange.svg)](https://raft.github.io/)
 [![gRPC](https://img.shields.io/badge/transport-gRPC-blue.svg)](https://grpc.io/)
-[![OSDI '24](https://img.shields.io/badge/Paper-OSDI%20'24-bf2c24.svg)](https://www.usenix.org/conference/osdi24/presentation/yu-liangcheng)
+[![OSDI '24](https://img.shields.io/badge/Paper-OSDI%20'24-bf2c24.svg)](https://www.usenix.org/conference/osdi24/presentation/yu)
 
-> **這是一個雲端原生的分散式系統實作，嘗試整合 [OSDI '24 Beaver 論文](https://www.usenix.org/conference/osdi24/presentation/yu-liangcheng) 中的部分快照 (Partial Snapshot) 技術，以達成 <3 秒的崩潰恢復速度。**
+> **這是一個雲端原生的分散式系統實作，嘗試整合 [OSDI '24 Beaver 論文](https://www.usenix.org/conference/osdi24/presentation/yu) 中的部分快照 (Partial Snapshot) 技術，以達成 <3 秒的崩潰恢復速度。**
 
 **raft-recovery** 是一個專為雲端原生環境設計的高可用性分散式工作佇列。它透過 Raft 共識演算法保證強一致性，並利用僅持久化關鍵「熱狀態」(Hot State) 的部分快照技術，實現極致的恢復速度。
 
@@ -143,7 +143,7 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件。
 
 本專案深受以下研究啟發：
 
-- **[Beaver: Practical Partial Snapshots for Distributed Cloud Services](https://www.usenix.org/conference/osdi24/presentation/yu-liangcheng)**  
+- **[Beaver: Practical Partial Snapshots for Distributed Cloud Services](https://www.usenix.org/conference/osdi24/presentation/yu)**  
   *Liangcheng Yu, Haoran Zhang, Vincent Liu, Xiao Zhang, John Sonchack, Dan Ports.*  
   18th USENIX Symposium on Operating Systems Design and Implementation (**OSDI '24**).
 
