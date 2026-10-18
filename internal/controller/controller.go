@@ -47,6 +47,9 @@
 package controller
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -78,7 +81,7 @@ type Config struct {
 	// WAL batch commit settings (NEW!)
 	WALBufferSize    int           // Max events per batch (e.g., 100)
 	WALFlushInterval time.Duration // Max time between flushes (e.g., 10ms)
-	
+
 	// Phase 2: Distributed Mode Settings
 	DisableDispatchLoop bool // If true, internal dispatch loops are disabled (for Master node)
 }
@@ -95,10 +98,20 @@ type Controller struct {
 	stopped    bool                   // Flag indicating if stopped
 	startTime  time.Time              // Start time (for statistics)
 	loopWg     sync.WaitGroup         // Wait for all loops to exit
-	
+
 	// Phase 3: Raft integration
-	applyCh    chan raft.ApplyMsg     // Channel for committed entries
-	raftNode   *raft.Raft             // Raft node instance
+	applyCh       chan raft.ApplyMsg // Channel for committed entries
+	raftNode      *raft.Raft         // Raft node instance
+	appliedNotify chan struct{}
+	applyErr      map[int64]error
+	applyResults  map[string]applyResult
+	replayAfter   uint64
+	fatalApplyErr error
+}
+
+type applyResult struct {
+	jobs     []types.Job
+	accepted bool
 }
 
 // ============================================================================
@@ -139,13 +152,16 @@ func NewController(config Config) (*Controller, error) {
 	pool := worker.NewPool(config.WALBufferSize)
 
 	return &Controller{
-		jobManager: jobManager,
-		wal:        walInstance,
-		snapshot:   snapshotMgr,
-		pool:       pool,
-		config:     config,
-		stopCh:     make(chan struct{}),
-		applyCh:    make(chan raft.ApplyMsg, 100),
+		jobManager:    jobManager,
+		wal:           walInstance,
+		snapshot:      snapshotMgr,
+		pool:          pool,
+		config:        config,
+		stopCh:        make(chan struct{}),
+		applyCh:       make(chan raft.ApplyMsg, 100),
+		appliedNotify: make(chan struct{}),
+		applyErr:      make(map[int64]error),
+		applyResults:  make(map[string]applyResult),
 	}, nil
 }
 
@@ -166,34 +182,39 @@ func (c *Controller) SetRaftNode(rf *raft.Raft) {
 //   - error: Startup failure error
 func (c *Controller) Start() error {
 	c.startTime = time.Now()
+	c.mu.Lock()
+	raftMode := c.raftNode != nil
+	c.mu.Unlock()
 
 	// 1. Recovery phase
 	log.Info("Starting recovery...")
+	if !raftMode {
 
-	if err := c.loadSnapshot(); err != nil {
-		return fmt.Errorf("loadSnapshot failed: %w", err)
-	}
-
-	if err := c.replayWAL(); err != nil {
-		return fmt.Errorf("replayWAL failed: %w", err)
-	}
-
-	// Requeue all in_flight jobs (these tasks were incomplete at the time of crash)
-	c.mu.Lock()
-	inFlightJobs := c.jobManager.GetAllInFlightJobs()
-	requeueCount := 0
-	for _, jobID := range inFlightJobs {
-		if err := c.jobManager.Requeue(jobID); err != nil {
-			log.Error("Failed to requeue in-flight job during recovery", "jobID", jobID, "error", err)
-		} else {
-			requeueCount++
+		if err := c.loadSnapshot(); err != nil {
+			return fmt.Errorf("loadSnapshot failed: %w", err)
 		}
-	}
-	c.mu.Unlock()
 
-	log.Info("Recovery completed",
-		"duration", time.Since(c.startTime),
-		"requeued_jobs", requeueCount)
+		if err := c.replayWAL(); err != nil {
+			return fmt.Errorf("replayWAL failed: %w", err)
+		}
+
+		// Requeue all in_flight jobs (these tasks were incomplete at the time of crash)
+		c.mu.Lock()
+		inFlightJobs := c.jobManager.GetAllInFlightJobs()
+		requeueCount := 0
+		for _, jobID := range inFlightJobs {
+			if err := c.jobManager.Requeue(jobID); err != nil {
+				log.Error("Failed to requeue in-flight job during recovery", "jobID", jobID, "error", err)
+			} else {
+				requeueCount++
+			}
+		}
+		c.mu.Unlock()
+
+		log.Info("Recovery completed",
+			"duration", time.Since(c.startTime),
+			"requeued_jobs", requeueCount)
+	}
 
 	// 2. Start Worker Pool
 	if err := c.pool.Start(c.config.WorkerCount, nil); err != nil {
@@ -204,10 +225,10 @@ func (c *Controller) Start() error {
 	// If DisableDispatchLoop is true (Master mode), we skip starting local dispatchers.
 	// The Controller will purely act as a passive backend for gRPC requests.
 	numDispatchers := 0
-	if !c.config.DisableDispatchLoop {
+	if !c.config.DisableDispatchLoop && !raftMode {
 		numDispatchers = 4 // Default parallel dispatchers for local mode
 	}
-	
+
 	c.loopWg.Add(3 + numDispatchers) // result + timeout + snapshot + N*dispatch
 
 	// Start multiple dispatch loops in parallel (only if enabled)
@@ -218,7 +239,7 @@ func (c *Controller) Start() error {
 	go c.resultLoop()
 	go c.timeoutLoop()
 	go c.snapshotLoop()
-	
+
 	// Phase 3: Start apply loop
 	c.loopWg.Add(1)
 	go c.applyLoop()
@@ -232,64 +253,185 @@ func (c *Controller) Start() error {
 // applyLoop listens for committed entries from Raft and applies them to the state machine.
 func (c *Controller) applyLoop() {
 	defer c.loopWg.Done()
-	
+
 	for {
 		select {
 		case <-c.stopCh:
 			return
 		case msg := <-c.applyCh:
-			if msg.CommandValid {
-				c.handleRaftCommand(msg.Command)
-				c.jobManager.SetLastAppliedIndex(msg.CommandIndex)
+			c.mu.Lock()
+			if c.fatalApplyErr != nil {
+				c.mu.Unlock()
+				continue
 			}
+			if msg.SnapshotValid {
+				var data types.SnapshotData
+				err := json.Unmarshal(msg.Snapshot, &data)
+				if err == nil && int64(data.LastSeq) != msg.SnapshotIndex {
+					err = fmt.Errorf("snapshot index mismatch: data=%d raft=%d", data.LastSeq, msg.SnapshotIndex)
+				}
+				if err == nil && msg.SnapshotIndex > c.jobManager.GetLastAppliedIndex() {
+					err = c.jobManager.Restore(data)
+				}
+				if err != nil {
+					c.applyErr[msg.SnapshotIndex] = err
+					c.fatalApplyErr = err
+					log.Error("Failed to restore Raft snapshot", "error", err)
+				}
+			} else if msg.CommandValid && msg.CommandIndex > c.jobManager.GetLastAppliedIndex() {
+				var err error
+				if len(msg.Command) > 0 {
+					err = c.handleRaftCommand(msg.CommandIndex, msg.Command)
+				}
+				if err != nil {
+					c.applyErr[msg.CommandIndex] = err
+					c.fatalApplyErr = err
+					log.Error("Failed to apply Raft command", "index", msg.CommandIndex, "error", err)
+				} else {
+					c.jobManager.AdvanceApplied(msg.CommandIndex)
+				}
+			}
+			close(c.appliedNotify)
+			c.appliedNotify = make(chan struct{})
+			c.mu.Unlock()
 		}
 	}
 }
 
-func (c *Controller) handleRaftCommand(data []byte) {
+// handleRaftCommand runs under c.mu; all payloads are validated before changing state.
+func (c *Controller) handleRaftCommand(index int64, data []byte) error {
 	var cmd raft.RaftCommand
 	if err := json.Unmarshal(data, &cmd); err != nil {
-		log.Error("Failed to unmarshal raft command", "error", err)
-		return
+		return err
 	}
-	
+
 	switch cmd.Type {
 	case raft.CmdEnqueue:
 		var payload raft.EnqueuePayload
-		json.Unmarshal(cmd.Payload, &payload)
-		c.mu.Lock()
-		for _, job := range payload.Jobs {
-			// Idempotency: skip if already exists
-			if jobPtr := c.jobManager.GetJob(job.ID); jobPtr != nil {
-				continue
-			}
-			c.jobManager.Enqueue(job)
+		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+			return err
 		}
-		c.mu.Unlock()
-		log.Debug("Applied Enqueue command from Raft", "count", len(payload.Jobs))
-		
+		for _, job := range payload.Jobs {
+			if job.ID == "" {
+				return fmt.Errorf("enqueue command contains empty job ID")
+			}
+		}
+		for _, job := range payload.Jobs {
+			if err := c.jobManager.ApplyEnqueue(job); err != nil {
+				return err
+			}
+		}
+	case raft.CmdDispatch:
+		var payload raft.DispatchPayload
+		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+			return err
+		}
+		job, accepted, err := c.jobManager.ApplyDispatch(types.JobID(payload.JobID), payload.WorkerID, payload.Attempt, payload.At, payload.Deadline)
+		if payload.ResultID != "" {
+			if _, waiting := c.applyResults[payload.ResultID]; waiting && err == nil && accepted {
+				c.applyResults[payload.ResultID] = applyResult{jobs: []types.Job{job}}
+			}
+		}
+		return err
 	case raft.CmdAck:
 		var payload raft.AckPayload
-		json.Unmarshal(cmd.Payload, &payload)
-		c.mu.Lock()
-		// Idempotency: skip if already completed or dead
-		if c.jobManager.IsCompleted(types.JobID(payload.JobID)) || c.jobManager.IsDead(types.JobID(payload.JobID)) {
-			c.mu.Unlock()
-			return
+		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+			return err
 		}
-		
-		job := c.jobManager.GetJob(types.JobID(payload.JobID))
-		if job != nil {
-			if payload.Status == types.StatusCompleted {
-				c.jobManager.MarkCompleted(job.ID)
-			} else {
-				c.jobManager.MarkDead(job.ID)
+		accepted, err := c.jobManager.ApplyAck(types.JobID(payload.JobID), payload.WorkerID, payload.Attempt, payload.Status, payload.At, payload.MaxRetry)
+		if payload.ResultID != "" {
+			if _, waiting := c.applyResults[payload.ResultID]; waiting && err == nil {
+				c.applyResults[payload.ResultID] = applyResult{accepted: accepted}
 			}
 		}
+		return err
+	case raft.CmdTimeout:
+		var payload raft.TimeoutPayload
+		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+			return err
+		}
+		_, err := c.jobManager.ApplyTimeout(types.JobID(payload.JobID), payload.Attempt, payload.At, payload.MaxRetry)
+		return err
+	default:
+		return fmt.Errorf("unknown Raft command %q", cmd.Type)
+	}
+	return nil
+}
+
+func (c *Controller) WaitApplied(ctx context.Context, index int64) error {
+	for {
+		c.mu.Lock()
+		if c.fatalApplyErr != nil {
+			err := c.fatalApplyErr
+			c.mu.Unlock()
+			return err
+		}
+		if err := c.applyErr[index]; err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		if c.jobManager.GetLastAppliedIndex() >= index {
+			c.mu.Unlock()
+			return nil
+		}
+		if c.stopped {
+			c.mu.Unlock()
+			return fmt.Errorf("controller stopped")
+		}
+		wait := c.appliedNotify
 		c.mu.Unlock()
-		log.Debug("Applied Ack command from Raft", "jobID", payload.JobID)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.stopCh:
+			return fmt.Errorf("controller stopped")
+		case <-wait:
+		}
 	}
 }
+
+// RegisterAppliedResult reserves a result slot for one in-flight RPC. The ID is
+// carried in its Raft command so apply can discard late results after the RPC
+// has canceled or lost ownership of the request.
+func (c *Controller) RegisterAppliedResult() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", fmt.Errorf("generate apply result ID: %w", err)
+	}
+	id := hex.EncodeToString(bytes[:])
+	c.mu.Lock()
+	c.applyResults[id] = applyResult{}
+	c.mu.Unlock()
+	return id, nil
+}
+
+// DiscardAppliedResult ends an RPC's ownership of its result. It also makes
+// any later apply of the command a no-op for result storage.
+func (c *Controller) DiscardAppliedResult(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.applyResults, id)
+}
+
+func (c *Controller) AppliedJobs(id string) []types.Job {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := c.applyResults[id]
+	delete(c.applyResults, id)
+	return result.jobs
+}
+
+func (c *Controller) AppliedAccepted(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := c.applyResults[id]
+	delete(c.applyResults, id)
+	return result.accepted
+}
+
+func (c *Controller) PendingJobs(limit int) []types.Job    { return c.jobManager.Pending(limit) }
+func (c *Controller) Job(id types.JobID) (types.Job, bool) { return c.jobManager.JobCopy(id) }
+func (c *Controller) MaxRetry() int                        { return c.config.MaxRetry }
 
 func (c *Controller) GetApplyCh() chan raft.ApplyMsg {
 	return c.applyCh
@@ -314,6 +456,8 @@ func (c *Controller) loadSnapshot() error {
 		c.mu.Unlock()
 		return fmt.Errorf("failed to restore state: %w", err)
 	}
+	c.replayAfter = data.LastSeq
+	c.wal.EnsureSequenceAtLeast(data.LastSeq)
 	c.mu.Unlock()
 
 	recoveryTime := time.Since(start)
@@ -341,12 +485,27 @@ func (c *Controller) replayWAL() error {
 	handler := func(event *wal.Event) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if event.Seq <= c.replayAfter {
+			return nil
+		}
 
 		switch event.Type {
 		case wal.EventEnqueue:
-			// Usually already included in snapshot, can skip
+			if c.jobManager.GetJob(event.JobID) != nil {
+				return nil
+			}
+			if event.Job == nil {
+				return fmt.Errorf("WAL enqueue %s lacks job payload; cannot recover", event.JobID)
+			}
+			return c.jobManager.ApplyEnqueue(*event.Job)
 
 		case wal.EventDispatch:
+			if c.jobManager.GetJob(event.JobID) == nil {
+				return fmt.Errorf("WAL dispatch %s has no enqueue", event.JobID)
+			}
+			if job := c.jobManager.GetJob(event.JobID); job.Status == types.StatusInFlight {
+				return nil
+			}
 			// Check idempotency: don't reschedule already completed or dead jobs
 			if c.jobManager.IsCompleted(event.JobID) ||
 				c.jobManager.IsDead(event.JobID) {
@@ -354,7 +513,7 @@ func (c *Controller) replayWAL() error {
 			}
 
 			// Mark as in-flight
-			deadline := time.Now().Add(c.config.TaskTimeout)
+			deadline := time.UnixMilli(event.Timestamp).Add(c.config.TaskTimeout)
 			return c.jobManager.MarkInFlight(event.JobID, deadline)
 
 		case wal.EventAck:
@@ -368,9 +527,27 @@ func (c *Controller) replayWAL() error {
 			return c.jobManager.Requeue(event.JobID)
 
 		case wal.EventTimeout:
+			job := c.jobManager.GetJob(event.JobID)
+			if job == nil {
+				return fmt.Errorf("WAL timeout %s has no enqueue", event.JobID)
+			}
+			if job.Status != types.StatusInFlight {
+				return nil
+			}
+			if event.Job != nil && event.Job.Attempt+1 >= c.config.MaxRetry {
+				job.Attempt = event.Job.Attempt + 1
+				return c.jobManager.MarkDead(event.JobID)
+			}
 			return c.jobManager.Requeue(event.JobID)
 
 		case wal.EventDead:
+			job := c.jobManager.GetJob(event.JobID)
+			if job == nil {
+				return fmt.Errorf("WAL dead %s has no enqueue", event.JobID)
+			}
+			if event.Job != nil {
+				job.Attempt = event.Job.Attempt + 1
+			}
 			return c.jobManager.MarkDead(event.JobID)
 		}
 
@@ -399,12 +576,22 @@ func (c *Controller) dispatchLoop() {
 			log.Info("Dispatch loop stopped")
 			return
 		default:
-			// Batch pop jobs to reduce lock acquisition frequency
+			// Keep the WAL append and state change in the same critical section
+			// as standalone snapshot writing and rotation.
 			c.mu.Lock()
-			jobs := make([]*types.Job, 0, batchSize)
-			for i := 0; i < batchSize; i++ {
-				job := c.jobManager.PopPending()
-				if job == nil {
+			pending := c.jobManager.Pending(batchSize)
+			jobs := make([]types.Job, 0, len(pending))
+			for _, job := range pending {
+				if err := c.wal.Append(wal.EventDispatch, &job); err != nil {
+					log.Error("Failed to append DISPATCH event", "jobID", job.ID, "error", err)
+					break
+				}
+				if popped := c.jobManager.PopPending(); popped == nil || popped.ID != job.ID {
+					log.Error("Pending queue changed during dispatch", "jobID", job.ID)
+					break
+				}
+				if err := c.jobManager.MarkInFlight(job.ID, time.Now().Add(c.config.TaskTimeout)); err != nil {
+					log.Error("Failed to mark in-flight", "jobID", job.ID, "error", err)
 					break
 				}
 				jobs = append(jobs, job)
@@ -422,27 +609,11 @@ func (c *Controller) dispatchLoop() {
 				}
 			}
 
-			// Phase 1: WAL writes (parallel-safe, no lock)
-			for _, job := range jobs {
-				if err := c.wal.Append(wal.EventDispatch, job); err != nil {
-					log.Error("Failed to append DISPATCH event", "error", err)
-				}
-			}
-
-			// Phase 2: Batch mark in-flight (single lock acquisition)
-			deadline := time.Now().Add(c.config.TaskTimeout)
-			c.mu.Lock()
-			for _, job := range jobs {
-				if err := c.jobManager.MarkInFlight(job.ID, deadline); err != nil {
-					log.Error("Failed to mark in-flight", "error", err)
-				}
-			}
-			c.mu.Unlock()
-
-			// Phase 3: Submit to Worker Pool (thread-safe)
+			// Submit after persistence and local state change.
 			for _, job := range jobs {
 				task := worker.Task{
 					ID:      job.ID,
+					Attempt: job.Attempt,
 					Payload: job.Payload,
 					Timeout: c.config.TaskTimeout,
 				}
@@ -482,10 +653,24 @@ func (c *Controller) resultLoop() {
 func (c *Controller) handleResult(result worker.Result) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.raftNode != nil {
+		log.Error("received local worker result in replicated mode", "jobID", result.JobID)
+		return
+	}
 
 	job := c.jobManager.GetJob(result.JobID)
 	if job == nil {
 		log.Warn("Unknown job", "jobID", result.JobID)
+		return
+	}
+	if job.Status != types.StatusInFlight {
+		// A delayed local result can arrive after timeout or another result.
+		// It must not create an ACK/RETRY record that replay cannot apply.
+		log.Debug("Ignoring stale worker result", "jobID", result.JobID, "status", job.Status)
+		return
+	}
+	if result.Attempt != job.Attempt {
+		log.Debug("Ignoring stale worker attempt", "jobID", result.JobID, "attempt", result.Attempt, "current", job.Attempt)
 		return
 	}
 
@@ -504,15 +689,16 @@ func (c *Controller) handleResult(result worker.Result) {
 			"jobID", result.JobID,
 			"duration", result.Duration)
 	} else {
-		// Failure: Increment retry count
-		job.Attempt++
-
-		if job.Attempt >= c.config.MaxRetry {
+		// Requeue increments the retry count; compute the outcome before
+		// writing the transition so an append failure leaves state intact.
+		nextAttempt := job.Attempt + 1
+		if nextAttempt >= c.config.MaxRetry {
 			// Exceeded retry count, move to dead letter queue
 			if err := c.wal.Append(wal.EventDead, job); err != nil {
 				log.Error("Failed to append DEAD event", "error", err)
 				return
 			}
+			job.Attempt = nextAttempt
 
 			if err := c.jobManager.MarkDead(result.JobID); err != nil {
 				log.Error("Failed to mark dead", "error", err)
@@ -520,7 +706,7 @@ func (c *Controller) handleResult(result worker.Result) {
 
 			log.Warn("Job marked as dead",
 				"jobID", result.JobID,
-				"attempts", job.Attempt)
+				"attempts", nextAttempt)
 		} else {
 			// Requeue
 			if err := c.wal.Append(wal.EventRetry, job); err != nil {
@@ -534,7 +720,7 @@ func (c *Controller) handleResult(result worker.Result) {
 
 			log.Debug("Job requeued",
 				"jobID", result.JobID,
-				"attempt", job.Attempt)
+				"attempt", nextAttempt)
 		}
 	}
 }
@@ -553,6 +739,32 @@ func (c *Controller) timeoutLoop() {
 
 		case <-ticker.C:
 			c.mu.Lock()
+			rf := c.raftNode
+			c.mu.Unlock()
+			if rf != nil {
+				if _, leader := rf.GetState(); !leader {
+					continue
+				}
+				at := time.Now().UnixMilli()
+				for _, job := range c.jobManager.Expired(at) {
+					cmd, err := raft.NewTimeoutCommand(raft.TimeoutPayload{JobID: string(job.ID), Attempt: job.Attempt, At: at, MaxRetry: c.config.MaxRetry})
+					if err != nil {
+						log.Error("encode timeout", "error", err)
+						continue
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					index, _, err := rf.ProposeContext(ctx, cmd)
+					if err == nil {
+						err = c.WaitApplied(ctx, index)
+					}
+					cancel()
+					if err != nil {
+						log.Warn("timeout proposal failed", "jobID", job.ID, "error", err)
+					}
+				}
+				continue
+			}
+			c.mu.Lock()
 
 			// Get all expired tasks
 			expiredJobIDs := c.jobManager.GetExpiredJobs(time.Now())
@@ -569,10 +781,9 @@ func (c *Controller) timeoutLoop() {
 					continue
 				}
 
-				// Increment retry count
-				job.Attempt++
-
-				if job.Attempt >= c.config.MaxRetry {
+				nextAttempt := job.Attempt + 1
+				if nextAttempt >= c.config.MaxRetry {
+					job.Attempt = nextAttempt
 					// Exceeded retry count, move to dead letter queue
 					if err := c.jobManager.MarkDead(jobID); err != nil {
 						log.Error("Failed to mark dead", "error", err)
@@ -597,7 +808,11 @@ func (c *Controller) timeoutLoop() {
 // snapshotLoop periodically generates snapshots
 func (c *Controller) snapshotLoop() {
 	defer c.loopWg.Done()
-	ticker := time.NewTicker(c.config.SnapshotInterval)
+	interval := c.config.SnapshotInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -618,35 +833,49 @@ func (c *Controller) snapshotLoop() {
 func (c *Controller) takeSnapshot() error {
 	start := time.Now()
 
-	// Phase 1: Quickly copy state with minimal lock hold time
+	// Capture the state and applied index together.
 	c.mu.Lock()
+	if c.fatalApplyErr != nil {
+		err := c.fatalApplyErr
+		c.mu.Unlock()
+		return fmt.Errorf("cannot snapshot failed state machine: %w", err)
+	}
 	var data types.SnapshotData
-	
+
 	// Beaver Logic: Use PartialSnapshot if Raft is enabled, otherwise Full Snapshot
 	if c.raftNode != nil {
 		data = c.jobManager.PartialSnapshot()
 		// Metadata for Raft
-		data.LastSeq = uint64(c.jobManager.GetLastAppliedIndex()) // We'll need this helper
+		data.LastSeq = uint64(c.jobManager.GetLastAppliedIndex())
 	} else {
 		data = c.jobManager.Snapshot()
 		data.LastSeq = c.wal.GetLastSeq()
 	}
 	raftPtr := c.raftNode
-	c.mu.Unlock()
+	if raftPtr != nil {
+		c.mu.Unlock()
+	} else {
+		// Standalone transitions also hold c.mu across WAL append and apply.
+		// Keep it until the snapshot file and WAL rotation are both durable.
+		defer c.mu.Unlock()
+	}
 
-	// Phase 2: Write to disk (no lock, runs async)
-	snapshotBytes, _ := json.Marshal(data)
+	// Standalone mode keeps the lock through persistence and WAL rotation so
+	// no transition can fall between the snapshot and its WAL boundary.
+	snapshotBytes, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	if raftPtr != nil {
+		if data.LastSeq == 0 {
+			return nil
+		}
+		return raftPtr.Snapshot(int64(data.LastSeq), snapshotBytes)
+	}
 	if err := c.snapshot.Write(data); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
-	// Phase 3: Notify Raft for log compaction (if enabled)
-	if raftPtr != nil {
-		raftPtr.Snapshot(int64(data.LastSeq), snapshotBytes)
-	}
-
-	// Phase 4: Rotate WAL (thread-safe operation)
-	// For Raft mode, we might not need WAL rotation the same way, but keeping it for now
 	if err := c.wal.Rotate(); err != nil {
 		return fmt.Errorf("failed to rotate WAL: %w", err)
 	}
@@ -664,10 +893,8 @@ func (c *Controller) takeSnapshot() error {
 
 // EnqueueJobs batch enqueues jobs
 //
-// Optimization: Batch WAL writes without holding lock
-// - WAL is thread-safe (has internal batch commit)
-// - Only lock when modifying JobManager
-// - Allows concurrent enqueue + dispatch/timeout operations
+// Standalone WAL append and local state change share the snapshot lock so a
+// rotated WAL can never discard an event outside the persisted snapshot.
 //
 // Parameters:
 //   - jobs: List of jobs to enqueue
@@ -675,19 +902,15 @@ func (c *Controller) takeSnapshot() error {
 // Returns:
 //   - error: Enqueue failure error
 func (c *Controller) EnqueueJobs(jobs []types.Job) error {
-	// Phase 1: Batch write to WAL (no lock needed, WAL is thread-safe)
-	// This allows dispatch/timeout loops to continue running
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.raftNode != nil {
+		return fmt.Errorf("replicated jobs must be enqueued through Raft")
+	}
 	for i := range jobs {
 		if err := c.wal.Append(wal.EventEnqueue, &jobs[i]); err != nil {
 			return fmt.Errorf("failed to append ENQUEUE event for job %s: %w", jobs[i].ID, err)
 		}
-	}
-
-	// Phase 2: Batch add to JobManager (lock held, but very fast)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for i := range jobs {
 		if err := c.jobManager.Enqueue(jobs[i]); err != nil {
 			return fmt.Errorf("failed to enqueue job %s: %w", jobs[i].ID, err)
 		}
@@ -743,7 +966,6 @@ func (c *Controller) GetStatus() map[string]interface{} {
 // Test Verification:
 //   - Functional tests: All tests pass (including Stop-related tests)
 //   - Stress tests: Multiple runs without deadlock or panic
-//   - Race tests: Benign races detected, but don't affect correctness
 //
 // ============================================================================
 // GetStats returns current job queue statistics

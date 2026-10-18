@@ -2,99 +2,97 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 )
 
-var (
-	ErrLogNotFound = errors.New("log entry not found")
-	ErrIndexOutOfRange = errors.New("index out of range")
-)
+var ErrLogNotFound = errors.New("log entry not found")
+var ErrIndexOutOfRange = errors.New("index out of range")
 
-// LogStore defines the interface for persisting Raft logs
+// LogStore contains a contiguous log suffix. Index zero is a virtual entry.
 type LogStore interface {
-	// FirstIndex returns the index of the first entry in the log
 	FirstIndex() (int64, error)
-
-	// LastIndex returns the index of the last entry in the log
 	LastIndex() (int64, error)
-
-	// GetLog returns the log entry at the given index
 	GetLog(index int64) (*LogEntry, error)
-
-	// StoreLog stores a single log entry
 	StoreLog(entry *LogEntry) error
-
-	// StoreLogs stores multiple log entries
 	StoreLogs(entries []*LogEntry) error
-
-	// DeleteRange deletes log entries in the range [min, max] (inclusive)
 	DeleteRange(min, max int64) error
 }
 
-// MemoryLogStore is an in-memory implementation of LogStore (for testing/prototyping)
 type MemoryLogStore struct {
-	entries []LogEntry
 	mu      sync.RWMutex
+	entries []LogEntry
+	base    int64
 }
 
-// NewMemoryLogStore creates a new MemoryLogStore
 func NewMemoryLogStore() *MemoryLogStore {
-	// Raft logs usually start at index 1. Index 0 is often a dummy entry.
-	return &MemoryLogStore{
-		entries: []LogEntry{{Term: 0, Index: 0}},
-	}
+	return &MemoryLogStore{entries: []LogEntry{{Index: 0, Term: 0}}}
 }
-
 func (m *MemoryLogStore) FirstIndex() (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.entries[0].Index, nil
+	return m.base, nil
 }
-
 func (m *MemoryLogStore) LastIndex() (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.entries[len(m.entries)-1].Index, nil
+	return m.base + int64(len(m.entries)) - 1, nil
 }
-
 func (m *MemoryLogStore) GetLog(index int64) (*LogEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
-	first, _ := m.FirstIndex()
-	offset := index - first
-	if offset < 0 || offset >= int64(len(m.entries)) {
+	off := index - m.base
+	if off < 0 || off >= int64(len(m.entries)) {
 		return nil, ErrLogNotFound
 	}
-	return &m.entries[offset], nil
+	e := m.entries[off]
+	e.Command = append([]byte(nil), e.Command...)
+	return &e, nil
 }
-
-func (m *MemoryLogStore) StoreLog(entry *LogEntry) error {
-	return m.StoreLogs([]*LogEntry{entry})
-}
-
+func (m *MemoryLogStore) StoreLog(e *LogEntry) error { return m.StoreLogs([]*LogEntry{e}) }
 func (m *MemoryLogStore) StoreLogs(entries []*LogEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
-	for _, entry := range entries {
-		m.entries = append(m.entries, *entry)
+	for _, p := range entries {
+		if p == nil || p.Index != m.base+int64(len(m.entries)) {
+			return fmt.Errorf("non-contiguous log append at %d", p.Index)
+		}
+		e := *p
+		e.Command = append([]byte(nil), e.Command...)
+		m.entries = append(m.entries, e)
 	}
 	return nil
 }
-
 func (m *MemoryLogStore) DeleteRange(min, max int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
-	// Example: Delete from index 'min' to 'max'
-	// This is a simple implementation for truncation
-	newEntries := make([]LogEntry, 0)
-	for _, entry := range m.entries {
-		if entry.Index < min || entry.Index > max {
-			newEntries = append(newEntries, entry)
-		}
+	if min > max {
+		return nil
 	}
-	m.entries = newEntries
-	return nil
+	last := m.base + int64(len(m.entries)) - 1
+	if min <= m.base && max >= last {
+		return errors.New("cannot erase entire log boundary")
+	}
+	if min <= m.base {
+		if max >= last {
+			return ErrIndexOutOfRange
+		}
+		m.entries = append([]LogEntry(nil), m.entries[max-m.base+1:]...)
+		m.base = max + 1
+		return nil
+	}
+	if max >= last {
+		if min > last {
+			return nil
+		}
+		m.entries = m.entries[:min-m.base]
+		return nil
+	}
+	return errors.New("cannot delete middle of log")
+}
+func (m *MemoryLogStore) replace(base int64, entries []LogEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.base = base
+	m.entries = append([]LogEntry(nil), entries...)
 }

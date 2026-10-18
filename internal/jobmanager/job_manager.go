@@ -58,6 +58,8 @@ package jobmanager
 
 import (
 	"errors"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -90,7 +92,7 @@ type JobManager struct {
 	inFlight  map[types.JobID]*types.Job // Executing jobs
 	completed map[types.JobID]*types.Job // Completed jobs
 	dead      map[types.JobID]*types.Job // Dead letter jobs
-	
+
 	// Phase 3: Raft integration
 	lastAppliedIndex int64
 }
@@ -101,6 +103,15 @@ func (jm *JobManager) SetLastAppliedIndex(index int64) {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 	jm.lastAppliedIndex = index
+}
+
+// AdvanceApplied records a log index after its state transition has completed.
+func (jm *JobManager) AdvanceApplied(index int64) {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	if index > jm.lastAppliedIndex {
+		jm.lastAppliedIndex = index
+	}
 }
 
 func (jm *JobManager) GetLastAppliedIndex() int64 {
@@ -388,6 +399,12 @@ func (jm *JobManager) MarkDead(jobID types.JobID) error {
 
 	// Remove from inFlight, add to dead
 	delete(jm.inFlight, jobID)
+	for i, queued := range jm.queue {
+		if queued == jobID {
+			jm.queue = append(jm.queue[:i], jm.queue[i+1:]...)
+			break
+		}
+	}
 	jm.dead[jobID] = job
 
 	return nil
@@ -493,31 +510,76 @@ func (jm *JobManager) Stats() map[string]int {
 func (jm *JobManager) Restore(data types.SnapshotData) error {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
-
-	// Clear existing state
-	jm.jobs = make(map[types.JobID]*types.Job)
-	jm.queue = make([]types.JobID, 0)
-	jm.inFlight = make(map[types.JobID]*types.Job)
-	jm.completed = make(map[types.JobID]*types.Job)
-	jm.dead = make(map[types.JobID]*types.Job)
-
-	// Restore all jobs
-	for jobID, job := range data.Jobs {
-		jm.jobs[jobID] = job
-
-		// Categorize by status
+	if data.SchemaVer > 3 {
+		return fmt.Errorf("unsupported snapshot schema %d", data.SchemaVer)
+	}
+	jobs := make(map[types.JobID]*types.Job, len(data.Jobs))
+	queue := make([]types.JobID, 0)
+	inFlight := make(map[types.JobID]*types.Job)
+	completed := make(map[types.JobID]*types.Job)
+	dead := make(map[types.JobID]*types.Job)
+	for id, job := range data.Jobs {
+		if job == nil || job.ID != id {
+			return fmt.Errorf("invalid snapshot job %q", id)
+		}
+		copyJob := *job
+		jobs[id] = &copyJob
 		switch job.Status {
 		case types.StatusPending:
-			jm.queue = append(jm.queue, jobID)
 		case types.StatusInFlight:
-			jm.inFlight[jobID] = job
+			inFlight[id] = &copyJob
 		case types.StatusCompleted:
-			jm.completed[jobID] = job
+			completed[id] = &copyJob
 		case types.StatusDead:
-			jm.dead[jobID] = job
+			dead[id] = &copyJob
+		default:
+			return fmt.Errorf("invalid snapshot status %q for %q", job.Status, id)
 		}
 	}
-
+	if len(data.PendingOrder) > 0 {
+		seen := make(map[types.JobID]bool)
+		for _, id := range data.PendingOrder {
+			if seen[id] || jobs[id] == nil || jobs[id].Status != types.StatusPending {
+				return fmt.Errorf("invalid pending order entry %q", id)
+			}
+			seen[id] = true
+			queue = append(queue, id)
+		}
+		var missing []types.JobID
+		for id, job := range jobs {
+			if job.Status == types.StatusPending && !seen[id] {
+				missing = append(missing, id)
+			}
+		}
+		if data.SchemaVer >= 3 && len(missing) != 0 {
+			return fmt.Errorf("snapshot missing %d pending order entries", len(missing))
+		}
+		sort.Slice(missing, func(i, j int) bool { return missing[i] < missing[j] })
+		queue = append(queue, missing...)
+	} else {
+		if data.SchemaVer >= 3 {
+			for _, job := range jobs {
+				if job.Status == types.StatusPending {
+					return fmt.Errorf("snapshot missing pending order")
+				}
+			}
+		}
+		// Legacy snapshots lacked order. A stable timestamp/ID order avoids random map iteration.
+		for id, job := range jobs {
+			if job.Status == types.StatusPending {
+				queue = append(queue, id)
+			}
+		}
+		sort.Slice(queue, func(i, j int) bool {
+			a, b := jobs[queue[i]], jobs[queue[j]]
+			if a.CreatedAt != b.CreatedAt {
+				return a.CreatedAt < b.CreatedAt
+			}
+			return queue[i] < queue[j]
+		})
+	}
+	jm.jobs, jm.queue, jm.inFlight, jm.completed, jm.dead = jobs, queue, inFlight, completed, dead
+	jm.lastAppliedIndex = int64(data.LastSeq)
 	return nil
 }
 
@@ -544,30 +606,35 @@ func (jm *JobManager) Snapshot() types.SnapshotData {
 	}
 
 	return types.SnapshotData{
-		Jobs:      jobsCopy,
-		SchemaVer: 1,
+		Jobs:         jobsCopy,
+		SchemaVer:    1,
+		PendingOrder: append([]types.JobID(nil), jm.queue...),
+		LastSeq:      uint64(jm.lastAppliedIndex),
 	}
 }
 
 // PartialSnapshot generates a smaller snapshot containing only essential state
-// Content: Pending and In-Flight jobs. Skips Completed and Dead jobs.
+// Content: active jobs and dead letters retain full data; completed jobs retain
+// compact tombstones so their IDs can never be enqueued again after compaction.
 func (jm *JobManager) PartialSnapshot() types.SnapshotData {
 	jm.mu.RLock()
 	defer jm.mu.RUnlock()
 
 	jobsCopy := make(map[types.JobID]*types.Job)
-	
-	// Only copy active jobs
+
 	for id, job := range jm.jobs {
-		if job.Status == types.StatusPending || job.Status == types.StatusInFlight {
-			jobCopy := *job
-			jobsCopy[id] = &jobCopy
+		jobCopy := *job
+		if job.Status == types.StatusCompleted {
+			jobCopy.Payload = nil
 		}
+		jobsCopy[id] = &jobCopy
 	}
 
 	return types.SnapshotData{
-		Jobs:      jobsCopy,
-		SchemaVer: 2, // New schema for partial snapshots
+		Jobs:         jobsCopy,
+		SchemaVer:    3,
+		PendingOrder: append([]types.JobID(nil), jm.queue...),
+		LastSeq:      uint64(jm.lastAppliedIndex),
 	}
 }
 

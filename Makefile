@@ -1,4 +1,4 @@
-.PHONY: all build test clean run demo install
+.PHONY: all build test race clean run demo demo-cluster install vet
 
 # 變數定義
 BINARY_NAME=beaver-raft
@@ -22,11 +22,10 @@ build:
 
 # 運行測試
 test:
-	@echo "Running tests..."
-	go test -v -race ./internal/controller/
-	go test -v -race ./internal/jobmanager/
-	go test -v -race ./test/integration/
-	@echo "All tests passed!"
+	go test ./...
+
+race:
+	go test -race ./...
 
 # 運行基準測試
 bench:
@@ -57,6 +56,9 @@ demo: build
 	@echo "Running demo..."
 	@mkdir -p data/wal data/snapshot test
 	@./scripts/demo.sh
+
+demo-cluster:
+	./scripts/demo-three-node-failover.sh
 
 # 提交任務
 enqueue: build
@@ -110,6 +112,7 @@ help:
 	@echo "  make clean    - Clean build artifacts"
 	@echo "  make run      - Build and run server"
 	@echo "  make demo     - Run demo script"
+	@echo "  make demo-cluster - Run the three-node Raft leader-loss smoke demo"
 	@echo "  make enqueue  - Enqueue test jobs"
 	@echo "  make status   - Show system status"
 	@echo "  make install  - Install dependencies"

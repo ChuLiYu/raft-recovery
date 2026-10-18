@@ -4,141 +4,246 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/ChuLiYu/raft-recovery/api/proto/v1"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-// GrpcJobSource is an implementation of JobSource that connects to a remote Master node via gRPC.
+// GrpcJobSource connects to one or more master addresses. Seed addresses are
+// tried in rotation so workers recover from an unavailable node or stale leader.
 type GrpcJobSource struct {
-	client     pb.FalconQueueServiceClient
 	workerID   string
-	workerAddr string // Optional: advertise address
+	workerAddr string
+	addresses  []string
+	legacyConn grpc.ClientConnInterface
+	mu         sync.Mutex
+	conns      map[string]*grpc.ClientConn
+	registered map[string]bool
+	next       int
 }
 
-// NewGrpcJobSource creates a new GrpcJobSource.
-// conn should be an established gRPC connection.
+const seedRPCTimeout = 2 * time.Second
+
 func NewGrpcJobSource(conn grpc.ClientConnInterface, workerID string, address string) *GrpcJobSource {
-	return &GrpcJobSource{
-		client:     pb.NewFalconQueueServiceClient(conn),
-		workerID:   workerID,
-		workerAddr: address,
-	}
+	return &GrpcJobSource{workerID: workerID, workerAddr: address, addresses: []string{""}, legacyConn: conn, conns: make(map[string]*grpc.ClientConn), registered: make(map[string]bool)}
 }
 
-// Poll fetches jobs from the remote Master.
-func (s *GrpcJobSource) Poll(ctx context.Context, maxJobs int) ([]*types.Job, error) {
-	req := &pb.PollJobsRequest{
-		WorkerId: s.workerID,
-		MaxJobs:  int32(maxJobs),
+// NewSeedGrpcJobSource creates a source from comma-separated seed addresses.
+func NewSeedGrpcJobSource(addresses, workerID, address string) *GrpcJobSource {
+	var seeds []string
+	for _, seed := range strings.Split(addresses, ",") {
+		if seed = strings.TrimSpace(seed); seed != "" {
+			seeds = append(seeds, seed)
+		}
 	}
+	return &GrpcJobSource{workerID: workerID, workerAddr: address, addresses: seeds, conns: make(map[string]*grpc.ClientConn), registered: make(map[string]bool)}
+}
 
-	resp, err := s.client.PollJobs(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("rpc poll failed: %w", err)
-	}
-
-	jobs := make([]*types.Job, 0, len(resp.Jobs))
-	for _, pbJob := range resp.Jobs {
-		var payload map[string]interface{}
-		// Unmarshal payload if present
-		if len(pbJob.Payload) > 0 {
-			if err := json.Unmarshal(pbJob.Payload, &payload); err != nil {
-				// Log warning but skip bad job? Or return error?
-				// For now, return incomplete job or empty payload
-				payload = make(map[string]interface{})
+func (s *GrpcJobSource) client(address string) (pb.FalconQueueServiceClient, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	conn := s.conns[address]
+	if conn == nil {
+		if address == "" {
+			if s.legacyConn != nil {
+				return pb.NewFalconQueueServiceClient(s.legacyConn), nil
 			}
+			return nil, fmt.Errorf("no gRPC connection configured")
 		}
-
-		job := &types.Job{
-			ID:        types.JobID(pbJob.Id),
-			Payload:   payload,
-			Status:    mapPbStatusToType(pbJob.Status),
-			Attempt:   int(pbJob.Attempt),
-			Timeout:   time.Duration(pbJob.TimeoutMs) * time.Millisecond,
-			CreatedAt: pbJob.CreatedAt,
-			UpdatedAt: pbJob.UpdatedAt,
-			WorkerID:  pbJob.WorkerId,
+		var err error
+		conn, err = grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return nil, err
 		}
-		
-		if pbJob.DeadlineMs > 0 {
-			deadline := pbJob.DeadlineMs
-			job.Deadline = &deadline
-		}
-
-		jobs = append(jobs, job)
+		s.conns[address] = conn
 	}
-
-	return jobs, nil
+	return pb.NewFalconQueueServiceClient(conn), nil
 }
 
-// Acknowledge reports job status to the remote Master.
-func (s *GrpcJobSource) Acknowledge(ctx context.Context, jobID string, status types.JobStatus, result *Result) error {
-	req := &pb.AcknowledgeJobRequest{
-		JobId:    jobID,
-		WorkerId: s.workerID,
-		Status:   mapStatusToPb(status),
-		// Result bytes could be sent if we extend the proto
+func (s *GrpcJobSource) begin() (int, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.addresses) == 0 {
+		return 0, ""
 	}
-
-	resp, err := s.client.AcknowledgeJob(ctx, req)
-	if err != nil {
-		return fmt.Errorf("rpc ack failed: %w", err)
-	}
-	
-	if !resp.Success {
-		return fmt.Errorf("master rejected ack")
-	}
-
-	return nil
+	return s.next % len(s.addresses), s.addresses[s.next%len(s.addresses)]
 }
 
-// Heartbeat sends a heartbeat to the remote Master.
-func (s *GrpcJobSource) Heartbeat(ctx context.Context, nodeID string, load int) error {
-	req := &pb.HeartbeatRequest{
-		NodeId:      nodeID,
-		CurrentLoad: int32(load),
-		Timestamp:   time.Now().UnixMilli(),
+func (s *GrpcJobSource) advance(i int, address string) {
+	s.mu.Lock()
+	s.registered[address] = false
+	if len(s.addresses) > 0 {
+		s.next = (i + 1) % len(s.addresses)
 	}
-
-	resp, err := s.client.SendHeartbeat(ctx, req)
-	if err != nil {
-		return fmt.Errorf("rpc heartbeat failed: %w", err)
-	}
-
-	if resp.ReRegister {
-		// Logic to re-register logic should be handled here or propagated.
-		// For now, we try to re-register immediately.
-		return s.register(ctx)
-	}
-
-	return nil
+	s.mu.Unlock()
 }
 
-func (s *GrpcJobSource) register(ctx context.Context) error {
-	req := &pb.RegisterWorkerRequest{
-		NodeId:   s.workerID,
-		Address:  s.workerAddr,
-		Capacity: 10, // Default capacity, could be parameterized
-		Tags:     []string{"default"},
+func (s *GrpcJobSource) ensureRegistered(ctx context.Context, address string, client pb.FalconQueueServiceClient) error {
+	s.mu.Lock()
+	ok := s.registered[address]
+	s.mu.Unlock()
+	if ok {
+		return nil
 	}
-	
-	resp, err := s.client.RegisterWorker(ctx, req)
+	resp, err := client.RegisterWorker(ctx, &pb.RegisterWorkerRequest{NodeId: s.workerID, Address: s.workerAddr, Capacity: 10, Tags: []string{"default"}})
 	if err != nil {
 		return err
 	}
-	
 	if !resp.Success {
-		return fmt.Errorf("registration failed")
+		return fmt.Errorf("worker registration rejected")
 	}
-	
+	s.mu.Lock()
+	s.registered[address] = true
+	s.mu.Unlock()
 	return nil
 }
 
-// Helpers (Duplicated from server for now to avoid shared dependency issues if packages are separated later)
-// Ideally these should be in a shared pkg.
+func (s *GrpcJobSource) Poll(ctx context.Context, maxJobs int) ([]*types.Job, error) {
+	start, _ := s.begin()
+	var lastErr error
+	for n := 0; n < len(s.addresses); n++ {
+		i := (start + n) % len(s.addresses)
+		address := s.addresses[i]
+		seedCtx, cancel := context.WithTimeout(ctx, seedRPCTimeout)
+		client, err := s.client(address)
+		if err == nil {
+			err = s.ensureRegistered(seedCtx, address, client)
+		}
+		var resp *pb.PollJobsResponse
+		if err == nil {
+			resp, err = client.PollJobs(seedCtx, &pb.PollJobsRequest{WorkerId: s.workerID, MaxJobs: int32(maxJobs)})
+		}
+		if err != nil {
+			cancel()
+			lastErr = err
+			s.advance(i, address)
+			continue
+		}
+		cancel()
+		s.mu.Lock()
+		s.next = i
+		s.mu.Unlock()
+		jobs := make([]*types.Job, 0, len(resp.Jobs))
+		for _, pbJob := range resp.Jobs {
+			var payload map[string]interface{}
+			if len(pbJob.Payload) > 0 {
+				if err := json.Unmarshal(pbJob.Payload, &payload); err != nil {
+					payload = make(map[string]interface{})
+				}
+			}
+			job := &types.Job{ID: types.JobID(pbJob.Id), Payload: payload, Status: mapPbStatusToType(pbJob.Status), Attempt: int(pbJob.Attempt), Timeout: time.Duration(pbJob.TimeoutMs) * time.Millisecond, CreatedAt: pbJob.CreatedAt, UpdatedAt: pbJob.UpdatedAt, WorkerID: pbJob.WorkerId}
+			if pbJob.DeadlineMs > 0 {
+				deadline := pbJob.DeadlineMs
+				job.Deadline = &deadline
+			}
+			jobs = append(jobs, job)
+		}
+		return jobs, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no master seed addresses configured")
+	}
+	return nil, lastErr
+}
+
+func (s *GrpcJobSource) Acknowledge(ctx context.Context, jobID string, status types.JobStatus, result *Result) error {
+	start, _ := s.begin()
+	var lastErr error
+	for n := 0; n < len(s.addresses); n++ {
+		i := (start + n) % len(s.addresses)
+		address := s.addresses[i]
+		seedCtx, cancel := context.WithTimeout(ctx, seedRPCTimeout)
+		client, err := s.client(address)
+		if err == nil {
+			err = s.ensureRegistered(seedCtx, address, client)
+		}
+		if err == nil {
+			attempt := int32(0)
+			if result != nil {
+				attempt = int32(result.Attempt)
+			}
+			resp, callErr := client.AcknowledgeJob(seedCtx, &pb.AcknowledgeJobRequest{JobId: jobID, WorkerId: s.workerID, Status: mapStatusToPb(status), Attempt: attempt})
+			err = callErr
+			if err == nil && resp.Success {
+				cancel()
+				s.mu.Lock()
+				s.next = i
+				s.mu.Unlock()
+				return nil
+			}
+			if err == nil {
+				err = fmt.Errorf("master rejected acknowledgement")
+			}
+		}
+		cancel()
+		lastErr = err
+		s.advance(i, address)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no master seed addresses configured")
+	}
+	return lastErr
+}
+
+func (s *GrpcJobSource) Heartbeat(ctx context.Context, nodeID string, load int) error {
+	start, _ := s.begin()
+	var lastErr error
+	for n := 0; n < len(s.addresses); n++ {
+		i := (start + n) % len(s.addresses)
+		address := s.addresses[i]
+		seedCtx, cancel := context.WithTimeout(ctx, seedRPCTimeout)
+		client, err := s.client(address)
+		if err == nil {
+			err = s.ensureRegistered(seedCtx, address, client)
+		}
+		if err == nil {
+			if nodeID == "" {
+				nodeID = s.workerID
+			}
+			resp, callErr := client.SendHeartbeat(seedCtx, &pb.HeartbeatRequest{NodeId: nodeID, CurrentLoad: int32(load), Timestamp: time.Now().UnixMilli()})
+			err = callErr
+			if err == nil && resp.ReRegister {
+				s.mu.Lock()
+				s.registered[address] = false
+				s.mu.Unlock()
+				err = s.ensureRegistered(seedCtx, address, client)
+			}
+			if err == nil {
+				cancel()
+				s.mu.Lock()
+				s.next = i
+				s.mu.Unlock()
+				return nil
+			}
+		}
+		cancel()
+		lastErr = err
+		s.advance(i, address)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no master seed addresses configured")
+	}
+	return lastErr
+}
+
+func (s *GrpcJobSource) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var first error
+	for _, conn := range s.conns {
+		if conn != nil {
+			if err := conn.Close(); err != nil && first == nil {
+				first = err
+			}
+		}
+	}
+	return first
+}
 
 func mapStatusToPb(s types.JobStatus) pb.JobStatus {
 	switch s {

@@ -24,41 +24,29 @@ func (c *Controller) Poll(ctx context.Context, maxJobs int) ([]*types.Job, error
 	if c.stopped {
 		return nil, worker.ErrPoolClosed
 	}
-
-	// Fetch pending jobs
-	jobs := make([]*types.Job, 0, maxJobs)
-	for i := 0; i < maxJobs; i++ {
-		job := c.jobManager.PopPending()
-		if job == nil {
-			break
-		}
-		jobs = append(jobs, job)
+	if c.raftNode != nil {
+		return nil, fmt.Errorf("replicated jobs must be dispatched through Raft")
 	}
 
-	if len(jobs) == 0 {
-		return jobs, nil
-	}
-
-	// Process jobs: Write WAL and update state
-	// Note: We are holding the lock, so this is safe but potentially blocking.
-	// Optimization: In Phase 1's dispatchLoop, we batched WAL writes without lock.
-	// Here, for simplicity and safety in the interface adapter, we hold the lock.
-	// Ideally, we should release lock for WAL I/O, but that requires careful state management.
-	
+	// WAL append and local state change share the standalone snapshot lock.
+	pending := c.jobManager.Pending(maxJobs)
+	jobs := make([]*types.Job, 0, len(pending))
 	deadline := time.Now().Add(c.config.TaskTimeout)
-
-	for _, job := range jobs {
-		// 1. Write WAL (Dispatch Event)
-		if err := c.wal.Append(wal.EventDispatch, job); err != nil {
-			log.Error("Failed to append DISPATCH event during Poll", "jobID", job.ID, "error", err)
-			// If WAL fails, we shouldn't return this job to worker? 
-			// For now, continue best effort.
+	for _, job := range pending {
+		if err := c.wal.Append(wal.EventDispatch, &job); err != nil {
+			return nil, fmt.Errorf("persist dispatch %s: %w", job.ID, err)
 		}
-
-		// 2. Mark In-Flight
+		if popped := c.jobManager.PopPending(); popped == nil || popped.ID != job.ID {
+			return nil, fmt.Errorf("pending queue changed during dispatch of %s", job.ID)
+		}
 		if err := c.jobManager.MarkInFlight(job.ID, deadline); err != nil {
-			log.Error("Failed to mark in-flight during Poll", "jobID", job.ID, "error", err)
+			return nil, err
 		}
+		assigned := job
+		assigned.Status = types.StatusInFlight
+		deadlineMs := deadline.UnixMilli()
+		assigned.Deadline = &deadlineMs
+		jobs = append(jobs, &assigned)
 	}
 
 	return jobs, nil
@@ -67,10 +55,16 @@ func (c *Controller) Poll(ctx context.Context, maxJobs int) ([]*types.Job, error
 // Acknowledge implements worker.JobSource.Acknowledge
 // It processes the result from the worker.
 func (c *Controller) Acknowledge(ctx context.Context, jobID string, status types.JobStatus, result *worker.Result) error {
+	c.mu.Lock()
+	replicated := c.raftNode != nil
+	c.mu.Unlock()
+	if replicated {
+		return fmt.Errorf("replicated acknowledgement must be proposed through Raft")
+	}
 	// Reuse handleResult logic, but adaptable to interface
 	// Since handleResult takes worker.Result (which contains status indirectly via Success bool),
 	// we construct a result object if needed, or use the passed one.
-	
+
 	if result == nil {
 		// Should not happen in current worker implementation, but handle gracefully
 		return fmt.Errorf("result is nil")

@@ -1,5 +1,7 @@
 # Phase 3: Beaver-Raft Implementation Plan (Consensus & Partial Snapshots)
 
+> **Status (2026-10-18): Historical implementation plan.** Treat the steps and metrics below as original planning, not a description of delivered behavior. For current implementation, verification, and limitations, see the [Phase 3 delivery audit](../PHASE3_DELIVERY.md) ([中文](../PHASE3_DELIVERY.zh-CN.md)).
+
 ## 0. System Architecture & Terminology (Unified Branding)
 The system is unified under the name **raft-recovery**, composed of three distinct layers:
 1.  **Falcon Layer (Transport & Execution)**: Handles gRPC communication, Worker management, and job dispatch. (Formerly Phase 2)

@@ -140,6 +140,7 @@ type batchRequest struct {
 
 // WAL represents a Write-Ahead Log instance
 type WAL struct {
+	submitMu     sync.Mutex    // Orders submission against rotation and close.
 	mu           sync.Mutex    // Protects concurrent writes
 	file         FileInterface // WAL file
 	encoder      *json.Encoder // JSON encoder
@@ -153,7 +154,8 @@ type WAL struct {
 	flushInterval time.Duration     // Max time between flushes
 	closed        chan struct{}     // Close signal
 	wg            sync.WaitGroup    // Wait for batch writer to finish
-	isClosed      bool              // Flag to prevent double close/rotate
+	writeErr      error
+	isClosed      bool // Flag to prevent double close/rotate
 
 	// Legacy fields (for backward compatibility during migration)
 	buffer        []Event   // Batch write event buffer
@@ -204,13 +206,14 @@ func NewWAL(path string, syncOnAppend bool, bufferSize int, flushInterval time.D
 
 	// Initialize event sequence number, default is 0
 	var seq uint64 = 0
+	var recoveryErr error
 
 	// If file is not empty, try to read last event to get seq
 	if lastEvent, err := GetLastEvent(path); err == nil && lastEvent != nil {
 		seq = lastEvent.Seq
 	} else if err != ErrEmptyWAL && err != nil {
 		// If file is corrupted or other error occurs
-		fmt.Printf("Warning: failed to get last event, starting from seq=0: %v\n", err)
+		recoveryErr = err
 		// If read fails or file is corrupted, seq can remain 0, decide based on requirements
 	}
 
@@ -227,6 +230,7 @@ func NewWAL(path string, syncOnAppend bool, bufferSize int, flushInterval time.D
 		file:         file,
 		encoder:      encoder,
 		path:         path,
+		writeErr:     recoveryErr,
 		seq:          seq,
 		syncOnAppend: syncOnAppend,
 
@@ -269,34 +273,34 @@ func NewWAL(path string, syncOnAppend bool, bufferSize int, flushInterval time.D
 //
 //	error (if write fails or WAL is closed)
 func (w *WAL) Append(eventType EventType, job *types.Job) error {
-	// Increment seq and create event (still needs lock for seq)
+	if job == nil {
+		return fmt.Errorf("nil WAL job")
+	}
+	// Capture nested payload maps before the caller can mutate the live job.
+	data, err := json.Marshal(job)
+	if err != nil {
+		return err
+	}
+	var captured types.Job
+	if err := json.Unmarshal(data, &captured); err != nil {
+		return err
+	}
+	w.submitMu.Lock()
 	w.mu.Lock()
+	if w.isClosed || w.batchChan == nil || w.writeErr != nil {
+		w.mu.Unlock()
+		w.submitMu.Unlock()
+		return fmt.Errorf("WAL is closed or uninitialized")
+	}
 	w.seq++
-	seq := w.seq
+	event := Event{Version: 2, Seq: w.seq, Type: eventType, JobID: captured.ID,
+		Timestamp: time.Now().UnixMilli(), Job: &captured}
+	event.Checksum = eventChecksum(event)
 	w.mu.Unlock()
-
-	timestamp := time.Now().UnixMilli()
-	checksum := CalculateChecksum(eventType, *job, seq)
-
-	event := Event{
-		Seq:       seq,
-		Type:      eventType,
-		JobID:     job.ID,
-		Timestamp: timestamp,
-		Checksum:  checksum,
-	}
-
-	// Create response channel
 	errCh := make(chan error, 1)
-
-	// Send to batch writer (non-blocking with timeout)
-	select {
-	case w.batchChan <- batchRequest{event: event, errCh: errCh}:
-		// Wait for batch to be flushed
-		return <-errCh
-	case <-w.closed:
-		return fmt.Errorf("WAL is closed")
-	}
+	w.batchChan <- batchRequest{event: event, errCh: errCh}
+	w.submitMu.Unlock()
+	return <-errCh
 }
 
 // Replay replays all WAL events
@@ -319,40 +323,7 @@ func (w *WAL) Replay(handler func(event *Event) error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Reopen file (read-only mode)
-	file, err := os.Open(w.path)
-	if err != nil {
-		return fmt.Errorf("failed to open WAL for replay: %w", err)
-	}
-	defer file.Close()
-
-	// Create JSON decoder
-	decoder := json.NewDecoder(file)
-
-	// Loop to read each event
-	for {
-		// Decode event
-		var event Event
-		err := decoder.Decode(&event)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to decode event: %w", err)
-		}
-
-		// Verify checksum (using VerifyChecksum)
-		if !VerifyChecksum(event) {
-			return ErrChecksumMismatch
-		}
-
-		// Call handler(event)
-		if err := handler(&event); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return scanEvents(w.path, func(event Event) error { return handler(&event) })
 }
 
 // Rotate rotates the log file
@@ -362,6 +333,8 @@ func (w *WAL) Replay(handler func(event *Event) error) error {
 //
 //	error (if rotation fails)
 func (w *WAL) Rotate() error {
+	w.submitMu.Lock()
+	defer w.submitMu.Unlock()
 	w.mu.Lock()
 	if w.isClosed {
 		w.mu.Unlock()
@@ -383,7 +356,7 @@ func (w *WAL) Rotate() error {
 		return err
 	}
 
-	backupPath := w.path + "." + time.Now().Format("20060102_150405")
+	backupPath := fmt.Sprintf("%s.%d", w.path, time.Now().UnixNano())
 	if err := os.Rename(w.path, backupPath); err != nil {
 		return err
 	}
@@ -395,7 +368,6 @@ func (w *WAL) Rotate() error {
 
 	w.file = newFile
 	w.encoder = json.NewEncoder(newFile)
-	w.seq = 0
 	w.buffer = w.buffer[:0]
 	w.lastFlushTime = time.Now()
 
@@ -403,7 +375,7 @@ func (w *WAL) Rotate() error {
 	w.closed = make(chan struct{})
 	w.wg.Add(1)
 	go w.batchWriter()
-	
+
 	w.isClosed = false // Restore available state
 
 	return nil
@@ -439,11 +411,18 @@ func (w *WAL) batchWriter() {
 			}
 
 		case <-w.closed:
-			// Flush remaining batch before shutdown
-			if len(batch) > 0 {
-				w.flushBatch(batch)
+			// No sender can enqueue after close while submitMu is held.
+			for {
+				select {
+				case req := <-w.batchChan:
+					batch = append(batch, req)
+				default:
+					if len(batch) > 0 {
+						w.flushBatch(batch)
+					}
+					return
+				}
 			}
-			return
 		}
 	}
 }
@@ -454,10 +433,13 @@ func (w *WAL) flushBatch(batch []batchRequest) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	var flushErr error
+	flushErr := w.writeErr
 
 	// Write all events to file (in-memory buffer)
 	for i := range batch {
+		if flushErr != nil {
+			break
+		}
 		if err := w.encoder.Encode(batch[i].event); err != nil {
 			flushErr = fmt.Errorf("failed to encode event: %w", err)
 			break
@@ -471,6 +453,9 @@ func (w *WAL) flushBatch(batch []batchRequest) {
 		}
 	}
 
+	if flushErr != nil {
+		w.writeErr = flushErr
+	}
 	// Respond to all requests in batch
 	for i := range batch {
 		batch[i].errCh <- flushErr
@@ -481,6 +466,8 @@ func (w *WAL) flushBatch(batch []batchRequest) {
 // Close closes the WAL gracefully
 // Ensures all pending batches are flushed before closing
 func (w *WAL) Close() error {
+	w.submitMu.Lock()
+	defer w.submitMu.Unlock()
 	w.mu.Lock()
 	if w.isClosed {
 		w.mu.Unlock()
@@ -647,4 +634,15 @@ func splitWALFile(srcPath string, maxSize int64) ([]string, error) {
 		outFile.Close()
 	}
 	return files, nil
+}
+
+// EnsureSequenceAtLeast carries a snapshot boundary into an empty rotated WAL.
+func (w *WAL) EnsureSequenceAtLeast(seq uint64) {
+	w.submitMu.Lock()
+	defer w.submitMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.seq < seq {
+		w.seq = seq
+	}
 }

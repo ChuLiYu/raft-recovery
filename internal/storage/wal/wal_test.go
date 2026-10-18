@@ -288,15 +288,14 @@ func TestSyncFailure(t *testing.T) {
 		},
 	}
 
-	wal := &WAL{
-		file:          mockFile,
-		seq:           0,
-		buffer:        make([]Event, 0),
-		bufferSize:    1, // Set to 1 to trigger immediate flush
-		lastFlushTime: time.Now().Add(-2 * time.Second),
-		flushInterval: 1 * time.Second,
-	}
+	wal, err := NewWAL(tempFile, true, 1, time.Millisecond)
+	assert.NoError(t, err)
+	defer wal.Close()
+	wal.mu.Lock()
+	wal.file.Close()
+	wal.file = mockFile
 	wal.encoder = json.NewEncoder(mockFile)
+	wal.mu.Unlock()
 
 	// Attempt to append an event - should trigger flush and fail on Sync
 	event := Event{
@@ -304,9 +303,9 @@ func TestSyncFailure(t *testing.T) {
 		JobID:     "job_1",
 		Timestamp: time.Now().UnixMilli(),
 	}
-	err := wal.Append(event.Type, &types.Job{ID: event.JobID})
+	err = wal.Append(event.Type, &types.Job{ID: event.JobID})
 	assert.Error(t, err)
-	assert.Equal(t, ErrSyncFailed, err)
+	assert.ErrorIs(t, err, ErrSyncFailed)
 }
 
 // ============================================================================
@@ -505,7 +504,7 @@ func TestWALLifecycle(t *testing.T) {
 	// Validate replayed events (should only contain the last 50 events)
 	assert.Equal(t, 50, len(replayedEvents))
 	for i, event := range replayedEvents {
-		expectedSeq := uint64(1 + i) // Seq resets to 1 after rotation
+		expectedSeq := uint64(101 + i) // Sequence remains monotonic to 1 after rotation
 		assert.Equal(t, expectedSeq, event.Seq)
 		assert.Equal(t, types.JobID(fmt.Sprintf("job_%d", 101+i)), event.JobID)
 	}
@@ -570,7 +569,7 @@ func TestSnapshotIntegration(t *testing.T) {
 	// The first 100 events are in the rotated backup file
 	assert.Equal(t, 50, len(replayedEvents))
 	for i, event := range replayedEvents {
-		expectedSeq := uint64(1 + i) // Seq resets after rotation
+		expectedSeq := uint64(101 + i) // Sequence remains monotonic after rotation
 		assert.Equal(t, expectedSeq, event.Seq)
 		assert.Equal(t, types.JobID(fmt.Sprintf("job_%d", 101+i)), event.JobID)
 	}

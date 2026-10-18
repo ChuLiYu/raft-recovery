@@ -94,11 +94,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	pb "github.com/ChuLiYu/raft-recovery/api/proto/v1"
 	"github.com/ChuLiYu/raft-recovery/internal/controller"
+	"github.com/ChuLiYu/raft-recovery/internal/raft"
 	"github.com/ChuLiYu/raft-recovery/internal/server"
 	"github.com/ChuLiYu/raft-recovery/internal/worker"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
@@ -151,7 +154,7 @@ func BuildCLI() *cobra.Command {
 - WAL-based durability
 - Snapshot-based recovery
 - Prometheus metrics
-- Sub-3 second recovery time`,
+- Optional replicated master mode using Raft`,
 		Version: "1.0.0",
 	}
 
@@ -168,24 +171,36 @@ func buildRunCommand() *cobra.Command {
 	var mode string
 	var port int
 	var masterAddr string
+	var nodeID string
+	var peers string
+	var dataDir string
+	var listenAddr string
 
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Start the Beaver-Raft queue system",
 		Long:  "Start the system in standalone, master, or worker mode",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSystem(mode, port, masterAddr)
+			return runSystemWithRaft(mode, port, masterAddr, nodeID, peers, dataDir, listenAddr)
 		},
 	}
 
 	cmd.Flags().StringVar(&mode, "mode", "standalone", "System mode: standalone, master, worker")
 	cmd.Flags().IntVar(&port, "port", 50051, "Port to listen on (master mode)")
-	cmd.Flags().StringVar(&masterAddr, "master", "", "Master address (worker mode)")
+	cmd.Flags().StringVar(&masterAddr, "master", "", "Master address or comma-separated seed addresses (worker mode)")
+	cmd.Flags().StringVar(&nodeID, "node-id", "", "Stable identity for this master (defaults to its listen address)")
+	cmd.Flags().StringVar(&peers, "peers", "", "Comma-separated master addresses, including this node; empty means single-node master")
+	cmd.Flags().StringVar(&dataDir, "data-dir", "", "Per-node durable Raft data directory")
+	cmd.Flags().StringVar(&listenAddr, "listen", "", "Address to bind in master mode (defaults to :port)")
 
 	return cmd
 }
 
 func runSystem(mode string, port int, masterAddr string) error {
+	return runSystemWithRaft(mode, port, masterAddr, "", "", "", "")
+}
+
+func runSystemWithRaft(mode string, port int, masterAddr, nodeID, peerList, dataDir, listenAddr string) error {
 	cfg, err := loadConfig(configFile)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -196,32 +211,39 @@ func runSystem(mode string, port int, masterAddr string) error {
 	if mode == "worker" {
 		return runWorkerNode(cfg, masterAddr)
 	}
+	if mode != "master" && mode != "standalone" {
+		return fmt.Errorf("unsupported mode %q (use standalone, master, or worker)", mode)
+	}
 
 	// Master or Standalone Mode
-	return runControllerNode(cfg, mode, port)
+	return runControllerNodeWithRaft(cfg, mode, port, nodeID, peerList, dataDir, listenAddr)
 }
 
 func runWorkerNode(cfg *Config, masterAddr string) error {
-	if masterAddr == "" {
+	seeds := 0
+	for _, address := range strings.Split(masterAddr, ",") {
+		if strings.TrimSpace(address) != "" {
+			seeds++
+		}
+	}
+	if seeds == 0 {
 		return fmt.Errorf("master address is required in worker mode")
 	}
 
-	log.Printf("Connecting to master at %s...\n", masterAddr)
-	
-	conn, err := grpc.NewClient(masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return fmt.Errorf("failed to connect to master: %w", err)
-	}
-	defer conn.Close()
+	log.Printf("Connecting to master seeds %s...\n", masterAddr)
 
 	// Create Worker Pool
 	pool := worker.NewPool(100)
-	
+
 	// Create JobSource (gRPC)
 	workerID := fmt.Sprintf("worker-%d", time.Now().UnixNano())
-	source := worker.NewGrpcJobSource(conn, workerID, "") // Address is optional for now
+	source := worker.NewSeedGrpcJobSource(masterAddr, workerID, "")
+	defer source.Close()
 
 	// Start Worker Pool with Pull Mode
+	if cfg.Worker.WorkerCount <= 0 {
+		cfg.Worker.WorkerCount = 1
+	}
 	log.Printf("Starting %d workers...\n", cfg.Worker.WorkerCount)
 	if err := pool.Start(cfg.Worker.WorkerCount, source); err != nil {
 		return fmt.Errorf("failed to start worker pool: %w", err)
@@ -237,22 +259,53 @@ func runWorkerNode(cfg *Config, masterAddr string) error {
 	return nil
 }
 
-func runControllerNode(cfg *Config, mode string, port int) error {
+func runControllerNodeWithRaft(cfg *Config, mode string, port int, nodeID, peerList, dataDir, listenAddr string) error {
 	log.Printf("Starting Controller with config: %s\n", configFile)
 	log.Printf("Workers: %d, Timeout: %s\n", cfg.Worker.WorkerCount, cfg.Worker.TaskTimeout)
+	if cfg.Worker.WorkerCount <= 0 {
+		cfg.Worker.WorkerCount = 1
+	}
+	if cfg.Snapshot.IntervalSeconds <= 0 {
+		cfg.Snapshot.IntervalSeconds = 10
+	}
+	if listenAddr == "" {
+		if nodeID != "" {
+			listenAddr = nodeID
+		} else {
+			listenAddr = fmt.Sprintf(":%d", port)
+		}
+	}
+	if mode == "master" && nodeID == "" {
+		nodeID = listenAddr
+	}
+	if mode == "master" && dataDir == "" {
+		dataDir = filepath.Join("data", "raft", fmt.Sprintf("node-%d", port))
+	}
+	var members []string
+	if mode == "master" {
+		var err error
+		members, err = resolveMasterMembers(nodeID, peerList)
+		if err != nil {
+			return err
+		}
+	}
 
 	// If running in distributed Master mode, disable internal dispatch loops to avoid stealing jobs from remote workers.
 	// This is critical for correct distributed operation (see PHASE2_DEBUG_REPORT.md).
 	ctrlConfig := controller.Config{
-		WorkerCount:      cfg.Worker.WorkerCount,
-		TaskTimeout:      cfg.Worker.TaskTimeout,
-		SnapshotInterval: time.Duration(cfg.Snapshot.IntervalSeconds) * time.Second,
-		MaxRetry:         3,
-		WALPath:          cfg.WAL.Dir,
-		SnapshotPath:     cfg.Snapshot.Dir,
-		WALBufferSize:    cfg.WAL.BufferSize,
-		WALFlushInterval: time.Duration(cfg.WAL.FlushIntervalMs) * time.Millisecond,
-		DisableDispatchLoop: mode == "master", // <-- Key fix: disables local dispatchers in Master mode
+		WorkerCount:         cfg.Worker.WorkerCount,
+		TaskTimeout:         cfg.Worker.TaskTimeout,
+		SnapshotInterval:    time.Duration(cfg.Snapshot.IntervalSeconds) * time.Second,
+		MaxRetry:            3,
+		WALPath:             cfg.WAL.Dir,
+		SnapshotPath:        cfg.Snapshot.Dir,
+		WALBufferSize:       cfg.WAL.BufferSize,
+		WALFlushInterval:    time.Duration(cfg.WAL.FlushIntervalMs) * time.Millisecond,
+		DisableDispatchLoop: mode == "master",
+	}
+	if mode == "master" {
+		ctrlConfig.WALPath = fmt.Sprintf("%s.%d", ctrlConfig.WALPath, port)
+		ctrlConfig.SnapshotPath = fmt.Sprintf("%s.%d", ctrlConfig.SnapshotPath, port)
 	}
 
 	ctrl, err := controller.NewController(ctrlConfig)
@@ -262,40 +315,61 @@ func runControllerNode(cfg *Config, mode string, port int) error {
 
 	globalCtrl = ctrl
 
-	// Start Metrics
+	var rf *raft.Raft
+	var transport *raft.GrpcTransport
+	var grpcServer *grpc.Server
+	var lis net.Listener
+	if mode == "master" {
+		transport = raft.NewGrpcTransport()
+		rf, err = raft.NewPersistentRaft(raft.Config{ID: nodeID, Peers: members}, dataDir, transport, ctrl.GetApplyCh())
+		if err != nil {
+			return fmt.Errorf("failed to create durable Raft node: %w", err)
+		}
+		ctrl.SetRaftNode(rf)
+	}
+	if err := ctrl.Start(); err != nil {
+		if rf != nil {
+			rf.Stop()
+		}
+		if transport != nil {
+			_ = transport.Close()
+		}
+		return fmt.Errorf("failed to start controller: %w", err)
+	}
+	if rf != nil {
+		rf.Start()
+	}
+
 	if cfg.Metrics.Enabled {
 		go func() {
-			http.Handle("/metrics", promhttp.Handler())
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promhttp.Handler())
 			addr := fmt.Sprintf(":%d", cfg.Metrics.Port)
 			log.Printf("Starting metrics server on %s\n", addr)
-			if err := http.ListenAndServe(addr, nil); err != nil {
+			if err := http.ListenAndServe(addr, mux); err != nil {
 				log.Printf("Metrics server error: %v\n", err)
 			}
 		}()
 	}
-
-	// Start Controller
-	if err := ctrl.Start(); err != nil {
-		return fmt.Errorf("failed to start controller: %w", err)
-	}
-
-	// If Master mode, start gRPC server
 	if mode == "master" {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		lis, err = net.Listen("tcp", listenAddr)
 		if err != nil {
-			return fmt.Errorf("failed to listen on port %d: %w", port, err)
+			if rf != nil {
+				rf.Stop()
+			}
+			ctrl.Stop()
+			if transport != nil {
+				_ = transport.Close()
+			}
+			return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
 		}
-		
-		grpcServer := grpc.NewServer()
-		// TODO: Initialize Raft node for Phase 3
-		srv := server.NewServer(ctrl, nil)
+		grpcServer = grpc.NewServer()
+		srv := server.NewServer(ctrl, rf)
 		pb.RegisterFalconQueueServiceServer(grpcServer, srv)
-		
-		log.Printf("gRPC Server listening on :%d\n", port)
-		
+		log.Printf("gRPC/Raft node %s listening on %s; peers=%v data=%s\n", nodeID, listenAddr, members, dataDir)
 		go func() {
 			if err := grpcServer.Serve(lis); err != nil {
-				log.Fatalf("gRPC server failed: %v", err)
+				log.Printf("gRPC server stopped: %v", err)
 			}
 		}()
 	}
@@ -308,10 +382,55 @@ func runControllerNode(cfg *Config, mode string, port int) error {
 	<-sigChan
 	log.Println("\nReceived shutdown signal, stopping gracefully...")
 
+	if grpcServer != nil {
+		grpcServer.GracefulStop()
+	}
+	if lis != nil {
+		_ = lis.Close()
+	}
+	if rf != nil {
+		rf.Stop()
+	}
 	ctrl.Stop()
+	if transport != nil {
+		_ = transport.Close()
+	}
 
 	log.Println("System stopped. Goodbye!")
 	return nil
+}
+
+func resolveMasterMembers(nodeID, peerList string) ([]string, error) {
+	var members []string
+	for _, peer := range strings.Split(peerList, ",") {
+		if peer = strings.TrimSpace(peer); peer != "" {
+			members = append(members, peer)
+		}
+	}
+	if len(members) == 0 {
+		members = []string{nodeID}
+	}
+	localHost, localPort, addressErr := net.SplitHostPort(nodeID)
+	if addressErr != nil || localPort == "" {
+		return nil, fmt.Errorf("master --node-id must be a host:port address, got %q", nodeID)
+	}
+	if len(members) > 1 && (localHost == "" || localHost == "0.0.0.0" || localHost == "::") {
+		return nil, fmt.Errorf("master --node-id %q is not routable in a multi-node cluster; use its advertised host:port", nodeID)
+	}
+	localMember := false
+	for _, member := range members {
+		peerHost, peerPort, err := net.SplitHostPort(member)
+		if err != nil || peerPort == "" || (len(members) > 1 && (peerHost == "" || peerHost == "0.0.0.0" || peerHost == "::")) {
+			return nil, fmt.Errorf("master peer %q must be a routable host:port address", member)
+		}
+		if member == nodeID {
+			localMember = true
+		}
+	}
+	if !localMember {
+		return nil, fmt.Errorf("local node ID %q must appear in --peers; peers contain cluster node identities and addresses", nodeID)
+	}
+	return members, nil
 }
 
 func buildEnqueueCommand() *cobra.Command {
@@ -331,13 +450,17 @@ func buildEnqueueCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&jobFile, "file", "f", "", "JSON file containing job definitions")
-	cmd.Flags().StringVar(&masterAddr, "master", "", "Master address (e.g. localhost:50051) for remote submission")
+	cmd.Flags().StringVar(&masterAddr, "master", "", "Master address or comma-separated seed addresses for remote submission")
 	cmd.MarkFlagRequired("file")
 
 	return cmd
 }
 
-func enqueueJobs(filePath string, masterAddr string) error {
+func enqueueJobs(filePath string, masterAddresses ...string) error {
+	masterAddr := ""
+	if len(masterAddresses) > 0 {
+		masterAddr = masterAddresses[0]
+	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read job file: %w", err)
@@ -355,35 +478,44 @@ func enqueueJobs(filePath string, masterAddr string) error {
 
 	// Mode 1: Remote Submission (gRPC)
 	if masterAddr != "" {
-		conn, err := grpc.NewClient(masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("failed to connect to master: %w", err)
+		var seeds []string
+		for _, seed := range strings.Split(masterAddr, ",") {
+			if seed = strings.TrimSpace(seed); seed != "" {
+				seeds = append(seeds, seed)
+			}
 		}
-		defer conn.Close()
-
-		client := pb.NewFalconQueueServiceClient(conn)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		if len(seeds) == 0 {
+			return fmt.Errorf("no master addresses provided")
+		}
 
 		successCount := 0
 		for _, j := range jobsInput {
 			payloadBytes, _ := json.Marshal(j.Payload)
-			req := &pb.SubmitJobRequest{
-				JobId:     j.ID,
-				Payload:   payloadBytes,
-				TimeoutMs: j.Timeout,
+			var lastErr error
+			for _, seed := range seeds {
+				conn, dialErr := grpc.NewClient(seed, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				if dialErr != nil {
+					lastErr = dialErr
+					continue
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, callErr := pb.NewFalconQueueServiceClient(conn).SubmitJob(ctx, &pb.SubmitJobRequest{JobId: j.ID, Payload: payloadBytes, TimeoutMs: j.Timeout})
+				cancel()
+				_ = conn.Close()
+				if callErr != nil {
+					lastErr = callErr
+					continue
+				}
+				if resp.Success {
+					successCount++
+					lastErr = nil
+					break
+				}
+				lastErr = fmt.Errorf("master rejected job: %s", resp.ErrorMessage)
 			}
-			
-			resp, err := client.SubmitJob(ctx, req)
-			if err != nil {
-				log.Printf("Failed to submit job %s: %v\n", j.ID, err)
-				continue
+			if lastErr != nil {
+				log.Printf("Failed to submit job %s: %v\n", j.ID, lastErr)
 			}
-			if !resp.Success {
-				log.Printf("Master rejected job %s: %s\n", j.ID, resp.ErrorMessage)
-				continue
-			}
-			successCount++
 		}
 		log.Printf("Successfully submitted %d/%d jobs to %s\n", successCount, len(jobsInput), masterAddr)
 		return nil

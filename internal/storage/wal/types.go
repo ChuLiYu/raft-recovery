@@ -21,11 +21,13 @@ const (
 
 // Event represents a WAL event record
 type Event struct {
-	Seq       uint64      `json:"seq"`       // Event sequence number (monotonically increasing)
-	Type      EventType   `json:"type"`      // Event type
-	JobID     types.JobID `json:"job_id"`    // Job ID (using pkg/types type)
-	Timestamp int64       `json:"timestamp"` // Unix millisecond timestamp
-	Checksum  uint32      `json:"checksum"`  // CRC32 checksum
+	Version   int         `json:"version,omitempty"`
+	Seq       uint64      `json:"seq"`           // Event sequence number (monotonically increasing)
+	Type      EventType   `json:"type"`          // Event type
+	JobID     types.JobID `json:"job_id"`        // Job ID (using pkg/types type)
+	Timestamp int64       `json:"timestamp"`     // Unix millisecond timestamp
+	Checksum  uint32      `json:"checksum"`      // CRC32 checksum
+	Job       *types.Job  `json:"job,omitempty"` // Complete immutable transition state for recovery.
 
 	// Phase 2: Extended fields
 	// WorkerID  string      `json:"worker_id,omitempty"` // Worker ID processing the job

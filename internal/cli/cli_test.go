@@ -45,6 +45,35 @@ func TestBuildRunCommand(t *testing.T) {
 	assert.NotNil(t, cmd.RunE, "RunE function should be set")
 }
 
+func TestBuildRunCommandClusterFlags(t *testing.T) {
+	cmd := buildRunCommand()
+	for _, name := range []string{"node-id", "peers", "data-dir", "listen", "port", "master"} {
+		assert.NotNil(t, cmd.Flags().Lookup(name), "run should expose --%s", name)
+	}
+	assert.Equal(t, "", cmd.Flags().Lookup("peers").DefValue, "empty peers use the safe one-node default")
+}
+
+func TestResolveMasterMembers(t *testing.T) {
+	t.Run("single node defaults to its listen address", func(t *testing.T) {
+		members, err := resolveMasterMembers(":50051", "")
+		require.NoError(t, err)
+		assert.Equal(t, []string{":50051"}, members)
+	})
+	t.Run("advertised identity is a cluster member", func(t *testing.T) {
+		members, err := resolveMasterMembers("127.0.0.1:50051", "127.0.0.1:50051,127.0.0.1:50052")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"127.0.0.1:50051", "127.0.0.1:50052"}, members)
+	})
+	t.Run("local identity must be in peer list", func(t *testing.T) {
+		_, err := resolveMasterMembers("127.0.0.1:50051", "127.0.0.1:50052,127.0.0.1:50053")
+		assert.ErrorContains(t, err, "must appear in --peers")
+	})
+	t.Run("rejects wildcard identity for a cluster", func(t *testing.T) {
+		_, err := resolveMasterMembers(":50051", ":50051,127.0.0.1:50052")
+		assert.ErrorContains(t, err, "not routable")
+	})
+}
+
 func TestBuildEnqueueCommand(t *testing.T) {
 	cmd := buildEnqueueCommand()
 
@@ -211,6 +240,10 @@ func TestEnqueueJobs_InvalidJSON(t *testing.T) {
 }
 
 func TestShowStatus(t *testing.T) {
+	oldConfigFile := configFile
+	configFile = filepath.Join("..", "..", "configs", "default.yaml")
+	t.Cleanup(func() { configFile = oldConfigFile })
+
 	// showStatus only prints output and should not return an error
 	err := showStatus()
 	assert.NoError(t, err, "showStatus should not return an error")
