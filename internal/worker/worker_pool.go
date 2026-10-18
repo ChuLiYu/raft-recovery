@@ -67,12 +67,12 @@ package worker
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
-
 
 // ============================================================================
 // Error Definitions
@@ -96,12 +96,15 @@ type Pool struct {
 	resultCh chan Result    // Result channel, used to collect Worker execution results
 	stopCh   chan struct{}  // Stop signal, used to notify Workers to stop working
 	wg       sync.WaitGroup // Synchronization tool to wait for all Workers to complete
+	workerWG sync.WaitGroup
+	pollerWG sync.WaitGroup
+	submitWG sync.WaitGroup // Submit calls admitted before Stop closes taskCh
 	started  bool           // Flag indicating whether Pool has started
 	stopped  bool           // Flag indicating whether Pool has stopped
 	mu       sync.Mutex     // Mutex to protect started and stopped state
-	
+
 	// Phase 2: JobSource integration
-	jobSource JobSource     // Optional source for pull-based execution
+	jobSource JobSource // Optional source for pull-based execution
 }
 
 // ============================================================================
@@ -148,27 +151,50 @@ func (p *Pool) Start(workerCount int, source JobSource) error {
 		p.workers = append(p.workers, worker)        // Add Worker to list
 
 		p.wg.Add(1) // Increase WaitGroup count
+		p.workerWG.Add(1)
 		go func(w *Worker) {
 			defer p.wg.Done() // Ensure count is decreased after Worker completes
-			w.Run()           // Start Worker's main loop
+			defer p.workerWG.Done()
+			w.Run() // Start Worker's main loop
 		}(worker)
 	}
 
 	// If a JobSource is provided, start the polling and acknowledgement loops
 	if source != nil {
-		p.wg.Add(2)
+		p.wg.Add(3)
+		p.pollerWG.Add(1)
 		go p.pollerLoop(source)
 		go p.ackLoop(source)
+		go p.heartbeatLoop(source)
 	}
 
 	p.started = true // Mark Pool as started
 	return nil
 }
 
+func (p *Pool) heartbeatLoop(source JobSource) {
+	defer p.wg.Done()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := source.Heartbeat(ctx, "", len(p.workers)); err != nil {
+				log.Printf("worker heartbeat failed: %v", err)
+			}
+			cancel()
+		}
+	}
+}
+
 // pollerLoop continuously polls jobs from the source and submits them to the workers.
 func (p *Pool) pollerLoop(source JobSource) {
 	defer p.wg.Done()
-	
+	defer p.pollerWG.Done()
+
 	// Default poll settings
 	pollInterval := 100 * time.Millisecond
 	batchSize := 10
@@ -196,10 +222,11 @@ func (p *Pool) pollerLoop(source JobSource) {
 			for _, job := range jobs {
 				task := Task{
 					ID:      job.ID,
+					Attempt: job.Attempt,
 					Payload: job.Payload,
 					Timeout: job.Timeout,
 				}
-				
+
 				// Respect stop signal while submitting
 				select {
 				case p.taskCh <- task:
@@ -231,15 +258,15 @@ func (p *Pool) ackLoop(source JobSource) {
 			if !result.Success {
 				// Note: Currently we don't distinguish between Dead and Retry here easily
 				// The JobSource implementation (Controller) should handle retry logic.
-				// However, the interface expects a status. 
+				// However, the interface expects a status.
 				// For now, let's assume if it failed here, we report it, and the Master decides if it's Dead or Retry.
 				// We'll pass StatusPending or maintain the current logic via the source.
 				// Actually, simpler: Pass result, let Source decide.
 				// But Acknowledge takes status.
 				// Let's modify Acknowledge to not require status, or infer it.
 				// Re-reading source.go: Acknowledge(..., status, result)
-				
-				// Correct approach: The worker just reports success/failure. 
+
+				// Correct approach: The worker just reports success/failure.
 				// The Master (JobSource impl) decides if it's Dead or Pending (retry).
 				// We will pass StatusCompleted for success, and StatusPending (or error) for failure.
 				// Let's pass StatusDead if we want to give up, but retry logic is usually on Master.
@@ -248,7 +275,11 @@ func (p *Pool) ackLoop(source JobSource) {
 
 			// Acknowledge
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = source.Acknowledge(ctx, string(result.JobID), status, &result)
+			if err := source.Acknowledge(ctx, string(result.JobID), status, &result); err != nil {
+				log.Printf("worker could not acknowledge job %s attempt %d: %v", result.JobID, result.Attempt, err)
+			} else {
+				log.Printf("worker acknowledged job %s attempt %d success=%t", result.JobID, result.Attempt, result.Success)
+			}
 			cancel()
 		}
 	}
@@ -262,55 +293,7 @@ func (p *Pool) ackLoop(source JobSource) {
 // Returns:
 //   - error: Returns error if Pool is not started or already closed
 //
-// ============================================================================
-// ⚠️  Known Benign Race Condition Documentation (Recorded on 2025-10-31)
-// ============================================================================
-//
-// Problem Description:
-//
-//	Go race detector will detect a data race between this method and Stop() method.
-//	Specifically, when Submit() is sending data to taskCh, Stop() may be closing taskCh.
-//
-// Race Detector Report Location:
-//   - Write: close(p.taskCh) in Pool.Stop() [worker_pool.go:156]
-//   - Read:  taskCh <- task in Pool.Submit() [worker_pool.go:115]
-//
-// Why this is "benign" (won't cause data corruption):
-//  1. State protection: Submit() checks with stopped flag and mu mutex
-//  2. Channel protection: Uses select + stopCh double-check mechanism
-//  3. Error handling: Even if race occurs, Submit() safely returns ErrPoolClosed
-//  4. Order guarantee: Stop() is only called after Controller.Stop() confirms all loops have exited
-//
-// Timing analysis (worst case):
-//
-//	T1: dispatchLoop calls Submit(), passes stopped check ✓
-//	T2: Submit() releases lock, prepares to send to taskCh
-//	T3: Stop() sets stopped=true, closes stopCh
-//	T4: Stop() closes taskCh ← Race detector detects here
-//	T5: Submit() attempts to send to taskCh
-//	    - If taskCh is closed → panic: send on closed channel
-//	    - But actually select will detect stopCh closure first → returns ErrPoolClosed ✓
-//
-// Why not fix:
-//  1. Fix requires introducing complex synchronization mechanism, may affect performance
-//  2. Current implementation is safe in actual operation (has stopCh as fallback)
-//  3. This race only appears under extreme timing (occasionally triggered in tests)
-//  4. Even if triggered, won't cause data corruption or system crash
-//
-// Verification methods:
-//   - Functional test: go test ./internal/controller/ -v -count=100  ✓ All pass
-//   - Race test: go test -race ./internal/controller/          ⚠️  Detected but no actual problem
-//
-// Future improvement directions (if needed):
-//  1. Use context.Context instead of stopCh for cancellation signal propagation
-//  2. Hold lock in Submit() until send completes (but will reduce concurrent performance)
-//  3. Use atomic operations instead of mutex (more complex but finer granularity)
-//
-// Related issues:
-//   - Go issue #8898: https://github.com/golang/go/issues/8898
-//   - Discussion: Sending to closed channel is panic, but select can detect safely
-//
-// ============================================================================
+// Submit admission is tracked so Stop waits before closing taskCh.
 func (p *Pool) Submit(task Task) error {
 	p.mu.Lock()
 	if !p.started {
@@ -321,6 +304,11 @@ func (p *Pool) Submit(task Task) error {
 		p.mu.Unlock()
 		return ErrPoolClosed // Pool already closed
 	}
+
+	// Add while holding mu: Stop changes stopped under this lock before waiting,
+	// so no Submit can begin after the wait starts.
+	p.submitWG.Add(1)
+	defer p.submitWG.Done()
 
 	// Save channel references (avoid accessing potentially closed channels in select)
 	taskCh := p.taskCh
@@ -372,8 +360,11 @@ func (p *Pool) Stop() {
 	p.stopped = true // Mark Pool as stopped
 	p.mu.Unlock()
 
-	close(p.stopCh) // Send stop signal
-	close(p.taskCh) // Stop accepting new tasks
+	close(p.stopCh)   // Stop source loops and stop accepting new tasks.
+	p.pollerWG.Wait() // Ensure the poller cannot send while taskCh is being closed.
+	p.submitWG.Wait() // Ensure public Submit calls cannot send while taskCh closes.
+	close(p.taskCh)
+	p.workerWG.Wait()
 
 	p.wg.Wait() // Wait for all Workers to complete
 

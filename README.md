@@ -1,156 +1,84 @@
-# raft-recovery: Distributed Job Queue with Raft Consensus & Partial Snapshots
+# Raft Recovery
 
-**English** | **[Chinese](README.zh-CN.md)** | **[Language Guide](LANGUAGE.md)**
+[中文](README.zh-CN.md) · [Implementation audit](docs/PHASE3_DELIVERY.md) · [Technical / interview guide](docs/INTERVIEW_GUIDE.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.23-blue.svg)](https://golang.org/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/ChuLiYu/raft-recovery)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Raft Consensus](https://img.shields.io/badge/consensus-Raft-orange.svg)](https://raft.github.io/)
-[![gRPC](https://img.shields.io/badge/transport-gRPC-blue.svg)](https://grpc.io/)
-[![OSDI '24](https://img.shields.io/badge/Paper-OSDI%20'24-bf2c24.svg)](https://www.usenix.org/conference/osdi24/presentation/yu)
+A Go job queue built in three stages: durable local execution, remote workers over gRPC, and a replicated queue using a custom Raft implementation. This is an educational systems project with tested recovery paths, not a production service.
 
-> **A cloud-native implementation of the [Beaver](https://www.usenix.org/conference/osdi24/presentation/yu) partial snapshot protocol (OSDI '24), integrated with Raft consensus.**
+## Current capabilities
 
-**raft-recovery** attempts to bridge the gap between academic research and production engineering. It implements the core "Partial Snapshot" concept from the OSDI '24 paper within a fully functional distributed job queue system, achieving **sub-3s crash recovery** and **strong consistency**.
+- **Phase 1:** checksummed full-job WAL records, synchronous durability acknowledgements, snapshots, replay, timeout/retry and dead letters.
+- **Phase 2:** protobuf/gRPC submission, registration, heartbeat leases, remote polling and attempt-fenced acknowledgements; workers and submitters rotate through master seed addresses.
+- **Phase 3:** randomized elections, persistent term/vote/log, log freshness voting, majority replication, conflict repair, current-term commit rule, ordered state-machine application, durable snapshots, log compaction and InstallSnapshot catch-up.
+- Queue ENQUEUE, DISPATCH, ACK and TIMEOUT all go through Raft in master mode. A successful write response waits for majority commit and local application. Followers reject queue operations with a leader hint.
+- Snapshots preserve FIFO order, active jobs, complete dead letters and completed-job tombstones. Retrying a job ID does not enqueue another job, including after compaction/restart. IDs must identify the same logical request; a duplicate does not replace its payload.
 
-## ✨ Key Highlights
+The default executor is a **simulation** (`sleep_ms` and optional failure), suitable for demonstrations. Applications need their own executor and external idempotency strategy. Worker delivery is **at least once**: fencing protects queue state, but cannot undo an external effect performed before a crash.
 
-- 🧠 **Distributed Consensus**: Custom implementation of **Raft** leader election and log replication ensures strong consistency across nodes.
-- ⚡ **Novel Recovery Mechanism**: Implements **Partial Snapshots** (inspired by Beaver, OSDI '24), reducing snapshot size by ~40% and accelerating recovery time to **< 3 seconds**.
-- 🚀 **Cloud-Native Transport**: **gRPC-based** Falcon Layer for high-throughput job dispatch and worker coordination.
-- 🛡️ **Zero Data Loss**: **Write-Ahead Log (WAL)** persistence ensures durability (RPO = 0) even in catastrophic failures.
-- 📊 **Observability**: Built-in **Prometheus** metrics for real-time monitoring of queue depth, latency, and node health.
+## Run a real three-master cluster
 
-## 🏗️ Architecture
-
-The system follows a **Three-Layer Architecture** to ensure separation of concerns and high maintainability.
-
-> 📐 **[View Detailed Architecture Diagrams](docs/architecture/DIAGRAMS.md)**
-
-```mermaid
-graph TD
-    Client[Client] -->|gRPC| Falcon[**Falcon Layer**<br>Transport & Execution]
-    
-    subgraph Node[raft-recovery Node]
-        Falcon -->|Propose| Beaver[**Beaver Layer**<br>Consensus & Storage]
-        Beaver -->|Committed Log| Core[**Core Layer**<br>State Machine]
-        Core -->|Dispatch| Falcon
-    end
-    
-    Beaver <-->|Raft Protocol| Peers[Cluster Peers]
-    Beaver -->|Persist| Disk[(WAL + Snapshot)]
-```
-
-### Layer Responsibilities
-
-| Layer | Component | Responsibility |
-|-------|-----------|----------------|
-| **Falcon** | Transport | Handles external API (gRPC), manages Worker connections, and dispatches tasks. |
-| **Beaver** | Consensus | Maintains distributed consistency via Raft, handles Log Replication, and manages Partial Snapshots for durability. |
-| **Core** | State Machine | Manages the job lifecycle (Pending → InFlight → Completed) and orchestrates the system loop. |
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Go 1.23+
-- Protobuf Compiler (`protoc`)
-
-### Single Node Mode (Standalone)
-Perfect for development and testing.
+Requires Go 1.23+; committed protobuf bindings mean `protoc` is only needed when changing the schema.
 
 ```bash
-# Build the project
-make build
-
-# Start the server (Controller + Worker)
-./bin/beaver-raft run
-
-# In another terminal, submit jobs
-./bin/beaver-raft enqueue --file test/jobs.json
+go build -o bin/beaver-raft ./cmd/queue
 ```
 
-### Distributed Cluster Mode (Raft)
-Simulate a 3-node Raft cluster locally.
+Open three terminals. All nodes use the same complete static membership list; IDs are routable addresses. Each node has its own durable data directory.
 
 ```bash
-# 1. Start Leader (Master)
-./bin/beaver-raft run --mode master --port 50051 --config configs/master.yaml
+# Terminal 1
+./bin/beaver-raft --config configs/cluster.yaml run --mode master \
+  --port 50051 --listen 127.0.0.1:50051 --node-id 127.0.0.1:50051 \
+  --peers 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 --data-dir data/node1
 
-# 2. Start Follower/Worker
-./bin/beaver-raft run --mode worker --master localhost:50051 --config configs/worker.yaml
+# Terminal 2
+./bin/beaver-raft --config configs/cluster.yaml run --mode master \
+  --port 50052 --listen 127.0.0.1:50052 --node-id 127.0.0.1:50052 \
+  --peers 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 --data-dir data/node2
 
-# 3. Submit Jobs to Cluster
-./bin/beaver-raft enqueue --file test/jobs.json --master localhost:50051
+# Terminal 3
+./bin/beaver-raft --config configs/cluster.yaml run --mode master \
+  --port 50053 --listen 127.0.0.1:50053 --node-id 127.0.0.1:50053 \
+  --peers 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 --data-dir data/node3
 ```
 
-*(Note: See `docs/guides/USAGE_GUIDE.md` for detailed cluster configuration)*
+In another terminal, start a worker and submit jobs:
 
-## 💡 Engineering Deep Dive
+```bash
+./bin/beaver-raft --config configs/cluster.yaml run --mode worker \
+  --master 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053
 
-### Why Partial Snapshots?
-Traditional snapshots save the *entire* system state, which is I/O intensive and slow. 
-**raft-recovery** adopts the "Partial Snapshot" strategy (inspired by the Beaver paper from OSDI '24):
-
-1.  **Insight**: Completed jobs are "cold state"—they don't affect future transitions. Only "hot state" (In-Flight & Pending jobs) matters for immediate recovery.
-2.  **Implementation**: The `Snapshot()` process filters out terminal states.
-3.  **Benefit**: Snapshot size is reduced by **40%+** in high-throughput scenarios, drastically lowering Recovery Time Objective (RTO).
-
-### Raft Implementation Details
-- **Leader Election**: Randomized election timeouts to prevent split votes.
-- **Log Replication**: Optimistic appending with consistency checks (`PrevLogTerm`).
-- **Safety**: Strict adherence to Raft invariants (State Machine Safety).
-
-## 📊 Performance
-
-| Metric | Target | Result |
-|--------|--------|--------|
-| **Recovery Time** | < 3s | **~1.2s** (Tested) |
-| **Throughput** | ≥ 200 jobs/s | **~250 jobs/s** |
-| **Data Integrity** | Zero Loss | **Guaranteed** by WAL |
-
-## 🗺️ Roadmap & Status
-
-- [x] **Phase 1: Core Foundation** - WAL, Snapshot, JobManager FSM.
-- [x] **Phase 2: Falcon Layer** - gRPC Transport, Master-Worker Architecture.
-- [x] **Phase 3: Beaver Layer** - Raft Consensus, Partial Snapshots.
-
-## 📂 Project Structure
-
-```text
-raft-recovery/
-├── api/proto/v1/       # gRPC & Raft Protobuf definitions
-├── cmd/                # Entry points
-├── internal/
-│   ├── cli/            # CLI logic
-│   ├── controller/     # Core Layer: Orchestration
-│   ├── jobmanager/     # Core Layer: State Machine
-│   ├── raft/           # Beaver Layer: Consensus Logic
-│   ├── server/         # Falcon Layer: gRPC Server
-│   ├── worker/         # Falcon Layer: Worker Client
-│   └── storage/        # Storage engines (WAL, Snapshot)
-└── docs/               # Architecture & Design docs
+./bin/beaver-raft --config configs/cluster.yaml enqueue --file test/demo-jobs.json \
+  --master 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053
 ```
 
-## 🤝 Contributing
+Master logs identify the elected leader. Kill that process and watch another master win election while workers reconnect. Restart with the **same ID, membership and data directory** to recover. Do not run two processes against one data directory. Losing two of three masters prevents new commits.
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) (if available) or check out the `docs/planning/` folder to understand the design before submitting PRs.
+For an automated abrupt leader-loss demonstration:
 
-## 📄 License
+```bash
+./scripts/demo-three-node-failover.sh
+```
 
-MIT License - see [LICENSE](LICENSE) file.
+The script uses temporary node directories, kills the elected leader with SIGKILL, and checks worker ACKs. It is a smoke test, not a latency benchmark. For standalone mode, use `run --mode standalone` and omit `--master` on enqueue; offline enqueue requires the running process to be stopped before modifying its WAL.
 
-## 📚 References
+## Verify
 
-This project is deeply inspired by the following research:
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+go test ./test/integration -run TestRaftClusterDurableFailover -count=3
+```
 
-- **[Beaver: Practical Partial Snapshots for Distributed Cloud Services](https://www.usenix.org/conference/osdi24/presentation/yu)**  
-  *Liangcheng Yu, Haoran Zhang, Vincent Liu, Xiao Zhang, John Sonchack, Dan Ports.*  
-  18th USENIX Symposium on Operating Systems Design and Implementation (**OSDI '24**).
+The integration test uses real gRPC connections and covers follower rejection, worker/attempt fencing, leader loss, replica restart, all-node disk recovery, snapshot tombstones and refusal to commit without quorum. See the delivery report for measured verification and remaining gaps.
 
-- **[In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf)**  
-  *Diego Ongaro and John Ousterhout.*  
-  USENIX Annual Technical Conference (**USENIX ATC '14**).
+## Design and limits
 
----
-**Author**: [ChuLiYu/GitHub]
-*Built as a high-performance distributed systems project demonstrating cloud engineering competencies.*
+- **Static membership only.** IDs and peer transport addresses are the same value. No joint consensus, automatic member replacement, pre-vote or check-quorum.
+- **Durable prototype storage.** Raft atomically replaces a JSON state image with file/directory fsync before acknowledging persistence. This costs O(retained log + snapshot size) per mutation; it is not the segmented Raft WAL originally proposed. Local WAL is a separate standalone recovery path.
+- **Compact queue checkpoints.** Completed payloads are discarded but tombstones remain; their memory/disk growth is unbounded. This is not a faithful implementation of the [OSDI 2024 Beaver protocol](https://www.usenix.org/conference/osdi24/presentation/yu), which coordinates partial snapshots under external traffic.
+- **No measured production guarantees.** Historical targets such as recovery under 3 seconds, 40% smaller snapshots, 30–50% faster recovery and particular throughput are goals until benchmarked with reproducible workloads. There is no arbitrary external exactly-once guarantee.
+- Worker registration is rebuildable soft state, rather than another replicated command. Dispatch ownership and attempts are durable. Metrics/CLI status do not yet provide a complete live cluster monitoring interface.
+- No TLS/authentication, bounded retention, automatic corrupt-state repair, deployment orchestration or proven linearizable query API. Use only trusted networks for the demo.
+
+For the theory behind the consensus rules, see the [Raft paper](https://raft.github.io/raft.pdf). Original phase documents under `docs/phases/` and `docs/planning/` preserve historical intent; the current behavior and deviations are recorded in [the delivery audit](docs/PHASE3_DELIVERY.md).

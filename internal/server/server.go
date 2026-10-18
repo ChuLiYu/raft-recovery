@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/ChuLiYu/raft-recovery/internal/raft"
 	"github.com/ChuLiYu/raft-recovery/internal/worker"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Server implements the gRPC server for FalconQueueService.
@@ -20,20 +23,20 @@ type Server struct {
 
 	controller *controller.Controller
 	raftNode   *raft.Raft
-	
+
 	// Worker Registry
-	mu       sync.RWMutex
-	workers  map[string]*WorkerInfo
+	mu      sync.RWMutex
+	workers map[string]*WorkerInfo
 }
 
 // WorkerInfo tracks the state of a registered worker
 type WorkerInfo struct {
-	NodeID      string
-	Address     string
-	Capacity    int32
-	Tags        []string
-	LastSeen    time.Time
-	ExpiryTime  time.Time
+	NodeID     string
+	Address    string
+	Capacity   int32
+	Tags       []string
+	LastSeen   time.Time
+	ExpiryTime time.Time
 }
 
 // NewServer creates a new gRPC server instance.
@@ -57,10 +60,10 @@ func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteRequest) (*
 		LastLogIndex: req.LastLogIndex,
 		LastLogTerm:  req.LastLogTerm,
 	}
-	
+
 	reply := &raft.RequestVoteReply{}
 	s.raftNode.RequestVote(args, reply)
-	
+
 	return &pb.RequestVoteResponse{
 		Term:        reply.Term,
 		VoteGranted: reply.VoteGranted,
@@ -90,18 +93,63 @@ func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesRequest
 		Entries:      entries,
 		LeaderCommit: req.LeaderCommit,
 	}
-	
+
 	reply := &raft.AppendEntriesReply{}
 	s.raftNode.AppendEntries(args, reply)
-	
+
 	return &pb.AppendEntriesResponse{
-		Term:    reply.Term,
-		Success: reply.Success,
+		Term:          reply.Term,
+		Success:       reply.Success,
+		ConflictIndex: reply.ConflictIndex,
+		ConflictTerm:  reply.ConflictTerm,
 	}, nil
+}
+
+func (s *Server) InstallSnapshot(ctx context.Context, req *pb.InstallSnapshotRequest) (*pb.InstallSnapshotResponse, error) {
+	if s.raftNode == nil {
+		return nil, status.Error(codes.FailedPrecondition, "raft node not initialized")
+	}
+	args := &raft.InstallSnapshotArgs{Term: req.Term, LeaderID: req.LeaderId, LastIncludedIndex: req.LastIncludedIndex, LastIncludedTerm: req.LastIncludedTerm, Data: req.Data}
+	reply := &raft.InstallSnapshotReply{}
+	s.raftNode.InstallSnapshot(args, reply)
+	return &pb.InstallSnapshotResponse{Term: reply.Term, Success: reply.Success}, nil
+}
+
+func (s *Server) requireLeader() error {
+	if s.raftNode == nil {
+		return nil
+	}
+	if _, leader := s.raftNode.GetState(); leader {
+		return nil
+	}
+	return status.Errorf(codes.FailedPrecondition, "not leader; leader=%s", s.raftNode.LeaderID())
+}
+
+func (s *Server) proposeApplied(ctx context.Context, cmd []byte) (int64, error) {
+	index, _, err := s.raftNode.ProposeContext(ctx, cmd)
+	if err != nil {
+		if errors.Is(err, raft.ErrNotLeader) {
+			return 0, status.Errorf(codes.FailedPrecondition, "not leader; leader=%s", s.raftNode.LeaderID())
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return 0, status.FromContextError(err).Err()
+		}
+		return 0, status.Errorf(codes.Unavailable, "raft proposal: %v", err)
+	}
+	if err := s.controller.WaitApplied(ctx, index); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return 0, status.FromContextError(err).Err()
+		}
+		return 0, status.Errorf(codes.Unavailable, "state apply: %v", err)
+	}
+	return index, nil
 }
 
 // SubmitJob handles job submission from clients.
 func (s *Server) SubmitJob(ctx context.Context, req *pb.SubmitJobRequest) (*pb.SubmitJobResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
 	// 1. Convert request to types.Job
 	jobID := req.JobId
 	if jobID == "" {
@@ -134,12 +182,11 @@ func (s *Server) SubmitJob(ctx context.Context, req *pb.SubmitJobRequest) (*pb.S
 		if err != nil {
 			return &pb.SubmitJobResponse{Success: false, ErrorMessage: "Failed to encode command"}, nil
 		}
-		
-		_, _, isLeader := s.raftNode.Propose(cmd)
-		if !isLeader {
-			return &pb.SubmitJobResponse{Success: false, ErrorMessage: "Not the leader"}, nil
+
+		if _, err := s.proposeApplied(ctx, cmd); err != nil {
+			return nil, err
 		}
-		
+
 		return &pb.SubmitJobResponse{Success: true, JobId: jobID}, nil
 	}
 
@@ -159,6 +206,12 @@ func (s *Server) SubmitJob(ctx context.Context, req *pb.SubmitJobRequest) (*pb.S
 
 // RegisterWorker registers a new worker node.
 func (s *Server) RegisterWorker(ctx context.Context, req *pb.RegisterWorkerRequest) (*pb.RegisterWorkerResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	if req.NodeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "worker ID required")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -181,6 +234,9 @@ func (s *Server) RegisterWorker(ctx context.Context, req *pb.RegisterWorkerReque
 
 // SendHeartbeat updates the liveness of a worker.
 func (s *Server) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -208,28 +264,77 @@ func (s *Server) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 
 // PollJobs fetches pending jobs for the worker.
 func (s *Server) PollJobs(ctx context.Context, req *pb.PollJobsRequest) (*pb.PollJobsResponse, error) {
-	// Call Controller.Poll directly
-	jobs, err := s.controller.Poll(ctx, int(req.MaxJobs))
-	if err != nil {
+	if err := s.requireLeader(); err != nil {
 		return nil, err
+	}
+	if req.MaxJobs < 0 || req.MaxJobs > 100 {
+		return nil, status.Error(codes.InvalidArgument, "max jobs must be between 0 and 100")
+	}
+	var jobs []*types.Job
+	if s.raftNode == nil {
+		var err error
+		jobs, err = s.controller.Poll(ctx, int(req.MaxJobs))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		s.mu.RLock()
+		workerInfo := s.workers[req.WorkerId]
+		validWorker := workerInfo != nil && time.Now().Before(workerInfo.ExpiryTime)
+		s.mu.RUnlock()
+		if !validWorker {
+			return nil, status.Error(codes.FailedPrecondition, "worker registration or lease expired")
+		}
+		for len(jobs) < int(req.MaxJobs) {
+			pending := s.controller.PendingJobs(1)
+			if len(pending) == 0 {
+				break
+			}
+			job := pending[0]
+			resultID, err := s.controller.RegisterAppliedResult()
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "register dispatch result: %v", err)
+			}
+			at := time.Now().UnixMilli()
+			timeout := job.Timeout
+			if timeout <= 0 {
+				timeout = 30 * time.Second
+			}
+			deadline := at + timeout.Milliseconds()
+			cmd, err := raft.NewDispatchCommand(raft.DispatchPayload{JobID: string(job.ID), WorkerID: req.WorkerId, Attempt: job.Attempt + 1, At: at, Deadline: deadline, ResultID: resultID})
+			if err != nil {
+				s.controller.DiscardAppliedResult(resultID)
+				return nil, status.Errorf(codes.Internal, "encode dispatch: %v", err)
+			}
+			_, err = s.proposeApplied(ctx, cmd)
+			if err != nil {
+				s.controller.DiscardAppliedResult(resultID)
+				return nil, err
+			}
+			for _, applied := range s.controller.AppliedJobs(resultID) {
+				j := applied
+				jobs = append(jobs, &j)
+			}
+			// A competing poll can win the head; retry on the next pending job.
+		}
 	}
 
 	// Convert types.Job to pb.Job
 	pbJobs := make([]*pb.Job, 0, len(jobs))
 	for _, job := range jobs {
 		payloadBytes, _ := json.Marshal(job.Payload)
-		
+
 		pbJob := &pb.Job{
-			Id:         string(job.ID),
-			Payload:    payloadBytes,
-			Status:     mapStatusToPb(job.Status),
-			Attempt:    int32(job.Attempt),
-			TimeoutMs:  job.Timeout.Milliseconds(),
-			CreatedAt:  job.CreatedAt,
-			UpdatedAt:  job.UpdatedAt,
-			WorkerId:   req.WorkerId,
+			Id:        string(job.ID),
+			Payload:   payloadBytes,
+			Status:    mapStatusToPb(job.Status),
+			Attempt:   int32(job.Attempt),
+			TimeoutMs: job.Timeout.Milliseconds(),
+			CreatedAt: job.CreatedAt,
+			UpdatedAt: job.UpdatedAt,
+			WorkerId:  req.WorkerId,
 		}
-		
+
 		if job.Deadline != nil {
 			pbJob.DeadlineMs = *job.Deadline
 		}
@@ -244,30 +349,45 @@ func (s *Server) PollJobs(ctx context.Context, req *pb.PollJobsRequest) (*pb.Pol
 
 // AcknowledgeJob reports job status from worker.
 func (s *Server) AcknowledgeJob(ctx context.Context, req *pb.AcknowledgeJobRequest) (*pb.AcknowledgeJobResponse, error) {
-	status := mapPbStatusToType(req.Status)
-	
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	jobStatus := mapPbStatusToType(req.Status)
+	if jobStatus != types.StatusCompleted && jobStatus != types.StatusDead {
+		return nil, status.Error(codes.InvalidArgument, "ACK status must be completed or dead")
+	}
+
 	// Phase 3: Propose via Raft
 	if s.raftNode != nil {
-		cmd, err := raft.NewAckCommand(req.JobId, status)
+		job, ok := s.controller.Job(types.JobID(req.JobId))
+		completedDuplicate := ok && job.Status == types.StatusCompleted && job.Attempt == int(req.GetAttempt()) && job.WorkerID == req.WorkerId && req.WorkerId != "" && jobStatus == types.StatusCompleted
+		if !completedDuplicate && (!ok || job.Status != types.StatusInFlight || job.Attempt != int(req.GetAttempt()) || job.WorkerID != req.WorkerId) {
+			return &pb.AcknowledgeJobResponse{Success: false}, nil
+		}
+		resultID, err := s.controller.RegisterAppliedResult()
 		if err != nil {
-			return &pb.AcknowledgeJobResponse{Success: false}, nil
+			return nil, status.Errorf(codes.Internal, "register ACK result: %v", err)
 		}
-		
-		_, _, isLeader := s.raftNode.Propose(cmd)
-		if !isLeader {
-			// In a real system, we might queue this until we become leader, or forward it
-			return &pb.AcknowledgeJobResponse{Success: false}, nil
+		cmd, err := raft.NewAckAttemptCommand(raft.AckPayload{JobID: req.JobId, WorkerID: req.WorkerId, Attempt: int(req.GetAttempt()), Status: jobStatus, At: time.Now().UnixMilli(), MaxRetry: s.controller.MaxRetry(), ResultID: resultID})
+		if err != nil {
+			s.controller.DiscardAppliedResult(resultID)
+			return nil, status.Errorf(codes.Internal, "encode ACK: %v", err)
 		}
-		
-		return &pb.AcknowledgeJobResponse{Success: true}, nil
+		_, err = s.proposeApplied(ctx, cmd)
+		if err != nil {
+			s.controller.DiscardAppliedResult(resultID)
+			return nil, err
+		}
+		return &pb.AcknowledgeJobResponse{Success: s.controller.AppliedAccepted(resultID)}, nil
 	}
 
 	result := &worker.Result{
-		JobID:    types.JobID(req.JobId),
-		Success:  status == types.StatusCompleted,
+		JobID:   types.JobID(req.JobId),
+		Attempt: int(req.GetAttempt()),
+		Success: jobStatus == types.StatusCompleted,
 	}
 
-	if err := s.controller.Acknowledge(ctx, req.JobId, status, result); err != nil {
+	if err := s.controller.Acknowledge(ctx, req.JobId, jobStatus, result); err != nil {
 		return &pb.AcknowledgeJobResponse{Success: false}, nil
 	}
 

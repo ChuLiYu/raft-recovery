@@ -6,6 +6,7 @@ package wal
 // ============================================================================
 
 import (
+	"encoding/json"
 	"hash/crc32"
 
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
@@ -46,6 +47,9 @@ func CalculateChecksum(eventType EventType, jobID types.Job, seq uint64) uint32 
 //
 //	bool - true indicates checksum is correct
 func VerifyChecksum(event Event) bool {
+	if event.Version == 2 {
+		return event.Checksum == eventChecksum(event)
+	}
 	// Recalculate expected checksum
 	// Note: Need to create a types.Job to match CalculateChecksum's signature
 	job := types.Job{ID: event.JobID}
@@ -53,6 +57,13 @@ func VerifyChecksum(event Event) bool {
 
 	// Compare calculated checksum with stored checksum in event
 	return event.Checksum == expected
+}
+
+// eventChecksum covers all persisted fields, including the payload and sequence.
+func eventChecksum(event Event) uint32 {
+	event.Checksum = 0
+	data, _ := json.Marshal(event)
+	return crc32.ChecksumIEEE(data)
 }
 
 // TODO: Advanced feature considerations

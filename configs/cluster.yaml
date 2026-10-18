@@ -1,0 +1,23 @@
+# Shared runtime settings for the three-node local demo. Each master receives
+# its own --data-dir, and the CLI suffixes the controller WAL/snapshot paths by
+# port so nodes never write the same local files.
+worker:
+  worker_count: 4
+  task_timeout: 20s
+
+wal:
+  dir: "./data/cluster/wal"
+  max_segment_size: 67108864
+  sync_interval: 10
+  retention_seconds: 86400
+  buffer_size: 100
+  flush_interval_ms: 10
+
+snapshot:
+  dir: "./data/cluster/snapshot"
+  interval_seconds: 10
+  retention_count: 5
+
+metrics:
+  enabled: false
+  port: 9090

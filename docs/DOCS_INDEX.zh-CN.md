@@ -6,27 +6,33 @@
 
 ### 🎯 新手入門（推薦閱讀順序）
 
-1. **[README.md](README.md)** - 項目概覽與快速開始
-2. **[USAGE_GUIDE.md](USAGE_GUIDE.md)** - 使用指南（命令、配置、監控）
-3. **[QUICKSTART.md](QUICKSTART.md)** - 開發者實作指南
+1. **[README.md](../README.md)** - 項目概覽與快速開始
+2. **[USAGE_GUIDE.md](guides/USAGE_GUIDE.md)** - 使用指南（命令、配置、監控）
+3. **[QUICKSTART.md](guides/QUICKSTART.md)** - 開發者實作指南
 
 ### 📋 完整參考
 
-1. **[PHASE1_SUMMARY.md](PHASE1_SUMMARY.md)** - Phase 1 完整功能說明
-2. **[IMPLEMENTATION_ORDER.md](IMPLEMENTATION_ORDER.md)** - 模塊實作順序與細節
-3. **[TEST_COVERAGE_REPORT.md](TEST_COVERAGE_REPORT.md)** - 測試覆蓋率報告
+1. **[PHASE1_SUMMARY.md](reports/PHASE1_SUMMARY.md)** - Phase 1 完整功能說明
+2. **[IMPLEMENTATION_ORDER.md](planning/IMPLEMENTATION_ORDER.md)** - 模塊實作順序與細節
+3. **[TEST_COVERAGE_REPORT.md](reports/TEST_COVERAGE_REPORT.md)** - 測試覆蓋率報告
 
 ### 🏗️ 架構與設計
 
-1. **[docs/phase1-architecture.md](docs/phase1-architecture.md)** - 系統架構設計
-2. **[docs/ai-notes.md](docs/ai-notes.md)** - AI 設計筆記與決策
-3. **[docs/phase1-snapshot-aware-job-queue.md](docs/phase1-snapshot-aware-job-queue.md)** - Phase 1 技術深度剖析
+1. **[docs/phase1-architecture.md](architecture/phase1-architecture.md)** - 系統架構設計
+2. **[docs/ai-notes.md](development/ai-notes.md)** - AI 設計筆記與決策
+3. **[docs/phase1-snapshot-aware-job-queue.md](phases/phase1-snapshot-aware-job-queue.md)** - Phase 1 技術深度剖析
 
 ### 🔮 未來規劃
 
-1. **[docs/roadmap.md](docs/roadmap.md)** - 項目路線圖
-2. **[docs/phase2-falconqueue.md](docs/phase2-falconqueue.md)** - Phase 2 設計
-3. **[docs/phase3-beaver-raft.md](docs/phase3-beaver-raft.md)** - Phase 3 設計
+1. **[項目路線圖](../roadmap.md)** - 項目演進規劃
+2. **[Phase 2 設計](phases/phase2-falconqueue.md)** - Phase 2 設計歷史
+3. **[Phase 3 設計](phases/phase3-beaver-raft.md)** - Phase 3 設計歷史
+
+### ✅ Phase 3：目前交付與學習
+
+- **[Phase 3 交付盤點](PHASE3_DELIVERY.md)** ([中文](PHASE3_DELIVERY.zh-CN.md)) - 目前實作、驗證結果與已知限制
+- **[技術與面試指南](INTERVIEW_GUIDE.md)** ([中文](INTERVIEW_GUIDE.zh-CN.md)) - 架構、正確性說明與討論提示
+- **[原始實作計畫](planning/PHASE3_IMPLEMENTATION_PLAN.md)** - 歷史計畫；目前狀態以交付盤點為準
 
 ## 🎓 按使用場景選擇文檔
 
@@ -34,8 +40,8 @@
 
 閱讀順序：
 
-1. [README.md](README.md) - 了解是什麼
-2. [USAGE_GUIDE.md](USAGE_GUIDE.md) - 學會怎麼用
+1. [README.md](../README.md) - 了解是什麼
+2. [USAGE_GUIDE.md](guides/USAGE_GUIDE.md) - 學會怎麼用
 3. 運行 `make demo` - 看實際效果
 
 時間：15 分鐘
@@ -44,9 +50,9 @@
 
 閱讀順序：
 
-1. [QUICKSTART.md](QUICKSTART.md) - 開發環境設置
-2. [IMPLEMENTATION_ORDER.md](IMPLEMENTATION_ORDER.md) - 理解模塊結構
-3. [docs/phase1-architecture.md](docs/phase1-architecture.md) - 理解設計
+1. [QUICKSTART.md](guides/QUICKSTART.md) - 開發環境設置
+2. [IMPLEMENTATION_ORDER.md](planning/IMPLEMENTATION_ORDER.md) - 理解模塊結構
+3. [docs/phase1-architecture.md](architecture/phase1-architecture.md) - 理解設計
 4. 查看源碼中的偽代碼註解
 
 時間：1-2 小時
@@ -55,10 +61,10 @@
 
 閱讀順序：
 
-1. [docs/ai-notes.md](docs/ai-notes.md) - 設計決策
-2. [docs/phase1-architecture.md](docs/phase1-architecture.md) - 架構設計
-3. [docs/phase1-snapshot-aware-job-queue.md](docs/phase1-snapshot-aware-job-queue.md) - 技術細節
-4. [PHASE1_SUMMARY.md](PHASE1_SUMMARY.md) - 完整總結
+1. [docs/ai-notes.md](development/ai-notes.md) - 設計決策
+2. [docs/phase1-architecture.md](architecture/phase1-architecture.md) - 架構設計
+3. [docs/phase1-snapshot-aware-job-queue.md](phases/phase1-snapshot-aware-job-queue.md) - 技術細節
+4. [PHASE1_SUMMARY.md](reports/PHASE1_SUMMARY.md) - 完整總結
 
 時間：2-3 小時
 
@@ -66,7 +72,7 @@
 
 閱讀順序：
 
-1. [TEST_COVERAGE_REPORT.md](TEST_COVERAGE_REPORT.md) - 測試報告
+1. [TEST_COVERAGE_REPORT.md](reports/TEST_COVERAGE_REPORT.md) - 測試報告
 2. 查看 `internal/*/*_test.go` - 具體測試用例
 3. 查看 `test/integration/` - 集成測試
 
@@ -90,15 +96,15 @@
 
 ### 我想知道
 
-- **如何啟動系統？** → [USAGE_GUIDE.md](USAGE_GUIDE.md#快速啟動)
-- **如何提交任務？** → [USAGE_GUIDE.md](USAGE_GUIDE.md#創建任務文件)
-- **如何測試崩潰恢復？** → [USAGE_GUIDE.md](USAGE_GUIDE.md#測試崩潰恢復)
-- **系統架構是什麼？** → [docs/phase1-architecture.md](docs/phase1-architecture.md)
-- **如何實作一個模塊？** → [IMPLEMENTATION_ORDER.md](IMPLEMENTATION_ORDER.md)
-- **WAL 是如何工作的？** → [docs/phase1-snapshot-aware-job-queue.md](docs/phase1-snapshot-aware-job-queue.md)
-- **為什麼這樣設計？** → [docs/ai-notes.md](docs/ai-notes.md)
-- **測試覆蓋率如何？** → [TEST_COVERAGE_REPORT.md](TEST_COVERAGE_REPORT.md)
-- **未來會有什麼功能？** → [docs/roadmap.md](docs/roadmap.md)
+- **如何啟動系統？** → [USAGE_GUIDE.md](guides/USAGE_GUIDE.md#快速啟動)
+- **如何提交任務？** → [USAGE_GUIDE.md](guides/USAGE_GUIDE.md#創建任務文件)
+- **如何測試崩潰恢復？** → [USAGE_GUIDE.md](guides/USAGE_GUIDE.md#測試崩潰恢復)
+- **系統架構是什麼？** → [docs/phase1-architecture.md](architecture/phase1-architecture.md)
+- **如何實作一個模塊？** → [IMPLEMENTATION_ORDER.md](planning/IMPLEMENTATION_ORDER.md)
+- **WAL 是如何工作的？** → [docs/phase1-snapshot-aware-job-queue.md](phases/phase1-snapshot-aware-job-queue.md)
+- **為什麼這樣設計？** → [docs/ai-notes.md](development/ai-notes.md)
+- **測試覆蓋率如何？** → [TEST_COVERAGE_REPORT.md](reports/TEST_COVERAGE_REPORT.md)
+- **未來會有什麼功能？** → [docs/roadmap.md](../roadmap.md)
 
 ## 📦 文檔更新記錄
 
@@ -124,4 +130,4 @@
 
 ---
 
-**快速鏈接**：[使用指南](USAGE_GUIDE.md) | [開發指南](QUICKSTART.md) | [架構設計](docs/phase1-architecture.md)
+**快速鏈接**：[使用指南](guides/USAGE_GUIDE.md) | [開發指南](guides/QUICKSTART.md) | [架構設計](architecture/phase1-architecture.md)

@@ -1125,9 +1125,6 @@ func TestSnapshotAndRestore(t *testing.T) {
 	jm1 := newTestJobManager()
 
 	// Add jobs in various states (ensure consistency)
-	// Pending
-	jm1.Enqueue(newTestJob("task-001"))
-
 	// InFlight
 	jm1.Enqueue(newTestJob("task-002"))
 	jm1.PopPending()
@@ -1143,6 +1140,9 @@ func TestSnapshotAndRestore(t *testing.T) {
 	jm1.Enqueue(newTestJob("task-004"))
 	jm1.PopPending() // remove from queue first
 	jm1.MarkDead("task-004")
+
+	// Pending
+	jm1.Enqueue(newTestJob("task-001"))
 
 	// Generate snapshot
 	snapshot := jm1.Snapshot()

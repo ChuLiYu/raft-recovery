@@ -91,6 +91,7 @@ func (w *Worker) Run() {
 		// Encapsulate execution result as Result struct
 		result := Result{
 			JobID:    task.ID,
+			Attempt:  task.Attempt,
 			Success:  err == nil,
 			Error:    err,
 			Duration: time.Since(start),

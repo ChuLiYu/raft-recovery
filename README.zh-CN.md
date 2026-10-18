@@ -1,156 +1,84 @@
-# raft-recovery: 基於 Raft 共識與部分快照的分散式工作佇列
+# Raft Recovery
 
-**[English](README.md)** | **中文** | **[語言指南](LANGUAGE.md)**
+[English](README.md) · [實作盤點](docs/PHASE3_DELIVERY.zh-CN.md) · [技術與面試筆記](docs/INTERVIEW_GUIDE.zh-CN.md)
 
-[![Go Version](https://img.shields.io/badge/Go-1.23-blue.svg)](https://golang.org/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/ChuLiYu/raft-recovery)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Raft Consensus](https://img.shields.io/badge/consensus-Raft-orange.svg)](https://raft.github.io/)
-[![gRPC](https://img.shields.io/badge/transport-gRPC-blue.svg)](https://grpc.io/)
-[![OSDI '24](https://img.shields.io/badge/Paper-OSDI%20'24-bf2c24.svg)](https://www.usenix.org/conference/osdi24/presentation/yu)
+這是一個以 Go 實作的工作佇列，從單機持久化、gRPC 遠端 worker，逐步做到自製 Raft 的多節點複寫。定位是可驗證恢復流程的系統工程作品；正式上線能力仍有待補足。
 
-> **這是一個雲端原生的分散式系統實作，嘗試整合 [OSDI '24 Beaver 論文](https://www.usenix.org/conference/osdi24/presentation/yu) 中的部分快照 (Partial Snapshot) 技術，以達成 <3 秒的崩潰恢復速度。**
+## 目前功能
 
-**raft-recovery** 是一個專為雲端原生環境設計的高可用性分散式工作佇列。它透過 Raft 共識演算法保證強一致性，並利用僅持久化關鍵「熱狀態」(Hot State) 的部分快照技術，實現極致的恢復速度。
+- **Phase 1：** 包含完整工作資料與 checksum 的 WAL、同步持久化回覆、快照、重播、逾時重試與 dead letter。
+- **Phase 2：** protobuf/gRPC 提交、worker 註冊、heartbeat lease、遠端拉取、含 attempt 驗證的 ACK；worker 與提交端可輪替多個 master seed。
+- **Phase 3：** 隨機選舉、term/vote/log 持久化、日誌新舊比較、多數複寫、衝突修復、當前 term 提交規則、按序套用 FSM、持久化快照、日誌壓縮及 InstallSnapshot 追趕。
+- master 模式的 ENQUEUE、DISPATCH、ACK、TIMEOUT 都經過 Raft。寫入成功要等多數提交及本機 FSM 套用；follower 拒絕佇列操作並提供 leader 提示。
+- 快照保留 FIFO 順序、活動工作、完整 dead letter 與已完成工作的 tombstone。相同 ID 重送不會再次入列，壓縮與重啟後也相同。ID 必須代表同一個邏輯請求；重送不會替換原 payload。
 
-## ✨ 核心亮點
+預設 executor 是以 `sleep_ms` 和失敗模擬展示流程的程式。接入實際業務時需提供 executor，並讓外部寫入具有冪等性。工作交付採 **at least once**；attempt fencing 保護的是佇列狀態，無法撤銷 worker 在當機前已造成的外部副作用。
 
-- 🧠 **分散式共識 (Distributed Consensus)**：手刻實作 **Raft** 領導者選舉 (Leader Election) 與日誌複製 (Log Replication)，確保節點間資料強一致。
-- ⚡ **創新的恢復機制 (Novel Recovery)**：實作 **部分快照 (Partial Snapshots)**（靈感源自 OSDI '24 Beaver 論文），將快照體積減少約 40%，並將恢復時間加速至 **< 3 秒**。
-- 🚀 **雲端原生傳輸 (Cloud-Native Transport)**：基於 **gRPC** 的 Falcon 層，提供高吞吐量的任務派發與 Worker 協調。
-- 🛡️ **零資料遺失 (Zero Data Loss)**：**預寫式日誌 (WAL)** 持久化機制確保即使在災難性故障下也能保證資料耐久性 (RPO = 0)。
-- 📊 **可觀測性 (Observability)**：內建 **Prometheus** 指標，可即時監控佇列深度、延遲與節點健康狀態。
+## 啟動真正的三個 master
 
-## 🏗️ 系統架構
-
-本系統採用 **三層式架構 (Three-Layer Architecture)** 以確保職責分離與高維護性。
-
-> 📐 **[查看詳細架構圖](docs/architecture/DIAGRAMS.md)**
-
-```mermaid
-graph TD
-    Client["客戶端"] -->|gRPC| Falcon["**Falcon Layer (獵鷹層)**<br>傳輸與執行"]
-    
-    subgraph Node["raft-recovery 節點"]
-        Falcon -->|提交提案| Beaver["**Beaver Layer (海狸層)**<br>共識與存儲"]
-        Beaver -->|已提交日誌| Core["**Core Layer (核心層)**<br>狀態機"]
-        Core -->|派發任務| Falcon
-    end
-    
-    Beaver <-->|Raft 協議| Peers["集群對等節點"]
-    Beaver -->|持久化| Disk[("WAL + 快照")]
-```
-
-### 分層職責
-
-| 層級 (Layer) | 組件 | 職責 |
-|-------|-----------|----------------|
-| **Falcon** | 傳輸層 | 處理外部 API (gRPC)，管理 Worker 連線，並派發任務。 |
-| **Beaver** | 共識層 | 透過 Raft 維護分散式一致性，處理日誌複製，並管理部分快照以確保耐久性。 |
-| **Core** | 狀態機 | 管理任務生命週期 (Pending → InFlight → Completed) 並協調系統迴圈。 |
-
-## 🚀 快速開始
-
-### 前置需求
-- Go 1.23+
-- Protobuf Compiler (`protoc`)
-
-### 單機模式 (Standalone)
-適合開發與測試。
+需要 Go 1.23+；protobuf 產物已提交，只有修改 schema 才需要 `protoc`。
 
 ```bash
-# 建置專案
-make build
-
-# 啟動伺服器 (包含 Controller 與 Worker)
-./bin/beaver-raft run
-
-# 在另一個終端機提交任務
-./bin/beaver-raft enqueue --file test/jobs.json
+go build -o bin/beaver-raft ./cmd/queue
 ```
 
-### 分散式集群模式 (Raft Cluster)
-在本地模擬 3 節點 Raft 集群。
+分別在三個終端執行。三個節點的靜態成員名單相同，ID 是可連線的位址，各自使用獨立資料目錄。
 
 ```bash
-# 1. 啟動 Leader (Master)
-./bin/beaver-raft run --mode master --port 50051 --config configs/master.yaml
+# 終端 1
+./bin/beaver-raft --config configs/cluster.yaml run --mode master \
+  --port 50051 --listen 127.0.0.1:50051 --node-id 127.0.0.1:50051 \
+  --peers 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 --data-dir data/node1
 
-# 2. 啟動 Follower/Worker
-./bin/beaver-raft run --mode worker --master localhost:50051 --config configs/worker.yaml
+# 終端 2
+./bin/beaver-raft --config configs/cluster.yaml run --mode master \
+  --port 50052 --listen 127.0.0.1:50052 --node-id 127.0.0.1:50052 \
+  --peers 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 --data-dir data/node2
 
-# 3. 提交任務到集群
-./bin/beaver-raft enqueue --file test/jobs.json --master localhost:50051
+# 終端 3
+./bin/beaver-raft --config configs/cluster.yaml run --mode master \
+  --port 50053 --listen 127.0.0.1:50053 --node-id 127.0.0.1:50053 \
+  --peers 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 --data-dir data/node3
 ```
 
-*(注意：詳細集群配置請參考 `docs/guides/USAGE_GUIDE.md`)*
+另一個終端啟動 worker 並提交工作：
 
-## 💡 技術深探 (Engineering Deep Dive)
+```bash
+./bin/beaver-raft --config configs/cluster.yaml run --mode worker \
+  --master 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053
 
-### 為什麼選擇部分快照 (Partial Snapshots)？
-傳統的快照技術會儲存系統的 **全部** 狀態，這會導致高 I/O 負載且速度緩慢。
-**raft-recovery** 採用了「部分快照」策略（啟發自 OSDI '24 的 Beaver 論文）：
-
-1.  **洞察 (Insight)**：已完成 (Completed) 的任務屬於「冷狀態 (Cold State)」，它們不會影響未來的狀態轉換。只有「熱狀態 (Hot State)」（執行中與待處理的任務）才對立即恢復至關重要。
-2.  **實作 (Implementation)**：`Snapshot()` 過程會主動過濾掉終端狀態的任務。
-3.  **效益 (Benefit)**：在高吞吐量場景下，快照體積減少 **40%+**，大幅降低復原時間目標 (RTO)。
-
-### Raft 實作細節
-- **領導者選舉**：採用隨機化選舉超時時間以防止選票瓜分 (Split Votes)。
-- **日誌複製**：採用樂觀追加 (Optimistic Appending) 並配合一致性檢查 (`PrevLogTerm`)。
-- **安全性**：嚴格遵守 Raft 不變性 (State Machine Safety)。
-
-## 📊 效能表現
-
-| 指標 | 目標 | 結果 |
-|--------|--------|--------|
-| **恢復時間** | < 3s | **~1.2s** (實測) |
-| **吞吐量** | ≥ 200 jobs/s | **~250 jobs/s** |
-| **資料完整性** | 零遺失 | **由 WAL 保證** |
-
-## 🗺️ 路線圖與狀態
-
-- [x] **Phase 1: 核心基礎** - WAL, Snapshot, JobManager FSM.
-- [x] **Phase 2: Falcon 層** - gRPC 傳輸, Master-Worker 架構.
-- [x] **Phase 3: Beaver 層** - Raft 共識, 部分快照.
-
-## 📂 專案結構
-
-```text
-raft-recovery/
-├── api/proto/v1/       # gRPC 與 Raft Protobuf 定義
-├── cmd/                # 程式入口點
-├── internal/
-│   ├── cli/            # CLI 邏輯
-│   ├── controller/     # Core 層：協調器
-│   ├── jobmanager/     # Core 層：狀態機
-│   ├── raft/           # Beaver 層：共識邏輯
-│   ├── server/         # Falcon 層：gRPC 伺服器
-│   ├── worker/         # Falcon 層：Worker 客戶端
-│   └── storage/        # 存儲引擎 (WAL, Snapshot)
-└── docs/               # 架構與設計文件
+./bin/beaver-raft --config configs/cluster.yaml enqueue --file test/demo-jobs.json \
+  --master 127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053
 ```
 
-## 🤝 貢獻
+從 master 日誌辨認 leader，結束其程序後，可觀察其他 master 選舉及 worker 重新連線。重啟務必使用**相同 ID、成員名單與資料目錄**；不可讓兩個程序共用一個資料目錄。三個 master 若只剩一個，無法提交新工作。
 
-歡迎提交 Pull Request！提交前請閱讀 `docs/planning/` 資料夾以理解設計理念。
+自動執行突然失去 leader 的展示：
 
-## 📄 授權條款
+```bash
+./scripts/demo-three-node-failover.sh
+```
 
-MIT License - 詳見 [LICENSE](LICENSE) 文件。
+腳本使用暫存資料目錄，以 SIGKILL 結束當選的 leader 並檢查 worker ACK；這是 smoke test，並非延遲 benchmark。單機模式使用 `run --mode standalone`，enqueue 不帶 `--master`；離線 enqueue 寫入 WAL 前，必須先停止正在使用該 WAL 的程序。
 
-## 📚 參考文獻
+## 驗證
 
-本專案深受以下研究啟發：
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+go test ./test/integration -run TestRaftClusterDurableFailover -count=3
+```
 
-- **[Beaver: Practical Partial Snapshots for Distributed Cloud Services](https://www.usenix.org/conference/osdi24/presentation/yu)**  
-  *Liangcheng Yu, Haoran Zhang, Vincent Liu, Xiao Zhang, John Sonchack, Dan Ports.*  
-  18th USENIX Symposium on Operating Systems Design and Implementation (**OSDI '24**).
+三節點整合測試使用真正 gRPC 連線，涵蓋 follower 拒絕寫入、worker/attempt 驗證、leader 故障、節點重啟、全節點磁碟恢復、快照去重與失去多數時不能提交。實際驗證結果及缺口請見實作盤點。
 
-- **[In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf)**  
-  *Diego Ongaro and John Ousterhout.*  
-  USENIX Annual Technical Conference (**USENIX ATC '14**).
+## 設計邊界
 
----
-**作者**: [ChuLiYu/GitHub]
-*作為一個展示雲端工程能力的高效能分散式系統專案而建。*
+- **固定成員。** ID 同時是 peer 連線位址；尚無 joint consensus、自動替換成員、pre-vote 或 check-quorum。
+- **先確保持久化正確。** Raft 將 JSON 狀態檔原子替換，並對檔案及目錄 fsync；每次修改的成本為 O(保留日誌＋快照大小)。這與原計畫的分段 Raft WAL 不同；單機 WAL 是另一條恢復路徑。
+- **精簡佇列 checkpoint。** 完成工作去除 payload、保留 tombstone，因此資料仍會隨歷史 ID 增長。本專案並未完整重現 [OSDI 2024 Beaver 論文協定](https://www.usenix.org/conference/osdi24/presentation/yu)；原論文處理外部流量下的分散式 partial snapshot。
+- **效能目標尚非保證。** 原文件的恢復低於 3 秒、快照減少 40%、恢復加快 30–50% 等數值，仍需可重現 benchmark 支持；也沒有任意外部副作用的 exactly once 保證。
+- worker 註冊採可重建 soft state；派工歸屬與 attempt 才持久化。metrics／CLI status 尚非完整線上叢集監控介面。
+- 尚無 TLS／認證、有界歷史保留、自動損毀修復、部署編排或已證明的線性一致查詢 API。展示請使用可信任網路。
+
+共識規則參考 [Raft 原論文](https://raft.github.io/raft.pdf)。`docs/phases/` 與 `docs/planning/` 留存原先規劃；目前行為和偏離原計畫之處，以[實作盤點](docs/PHASE3_DELIVERY.zh-CN.md)為準。

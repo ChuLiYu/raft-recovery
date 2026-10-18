@@ -80,7 +80,8 @@ type InFlightInfo struct {
 
 // SnapshotData contains system state for persistence and recovery
 type SnapshotData struct {
-	Jobs      map[JobID]*Job `json:"jobs"`       // Complete job data
-	SchemaVer int            `json:"schema_ver"` // Schema version for compatibility
-	LastSeq   uint64         `json:"last_seq"`   // Last processed sequence number
+	Jobs         map[JobID]*Job `json:"jobs"`                    // Complete job data
+	SchemaVer    int            `json:"schema_ver"`              // Schema version for compatibility
+	LastSeq      uint64         `json:"last_seq"`                // Last processed sequence number
+	PendingOrder []JobID        `json:"pending_order,omitempty"` // Exact FIFO order, including retried jobs
 }

@@ -6,7 +6,10 @@ package wal
 // ============================================================================
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 )
 
 // ============================================================================
@@ -27,25 +30,15 @@ import (
 //
 //	Last event, error (returns ErrEmptyWAL if file is empty)
 func GetLastEvent(path string) (*Event, error) {
-	// TODO: Implement last event reading
-	// Strategy options:
-	//
-	// Option A: Scan from start to end (simple but slow)
-	//   - Read line by line until EOF
-	//   - Return the last successfully parsed event
-	//
-	// Option B: Search backwards from end (fast but complex)
-	//   - Seek to end of file
-	//   - Search backwards for last newline
-	//   - Parse that line
-	//
-	// Option C: Maintain index file (fastest but requires extra maintenance)
-	//   - WAL.index records position of each event
-	//   - Jump directly to last event
-	//
-	// Consider: Which approach suits your scenario?
-
-	return nil, nil
+	var last *Event
+	err := scanEvents(path, func(event Event) error { copy := event; last = &copy; return nil })
+	if err != nil {
+		return nil, err
+	}
+	if last == nil {
+		return nil, ErrEmptyWAL
+	}
+	return last, nil
 }
 
 // CountEvents counts the total number of events in WAL
@@ -54,13 +47,9 @@ func GetLastEvent(path string) (*Event, error) {
 // - Debugging and diagnostics
 // - Statistics and monitoring
 func CountEvents(path string) (int, error) {
-	// TODO: Implement event counting
-	// 1. Open file
-	// 2. Read line by line using decoder
-	// 3. Count successfully parsed events
-	// 4. Ignore corrupted events? Or return error?
-
-	return 0, nil
+	count := 0
+	err := scanEvents(path, func(Event) error { count++; return nil })
+	return count, err
 }
 
 // ValidateWAL validates WAL file integrity
@@ -74,18 +63,7 @@ func CountEvents(path string) (int, error) {
 //
 //	error (if any issues found)
 func ValidateWAL(path string) error {
-	// TODO: Implement WAL validation
-	// 1. Replay all events
-	// 2. Validate each event's checksum
-	// 3. Validate seq continuity:
-	//    lastSeq := uint64(0)
-	//    for each event:
-	//      if event.Seq != lastSeq + 1:
-	//        return error
-	//      lastSeq = event.Seq
-	// 4. Collect and report all errors (not just the first)
-
-	return nil
+	return scanEvents(path, func(Event) error { return nil })
 }
 
 // ============================================================================
@@ -113,7 +91,7 @@ func RepairWAL(srcPath, dstPath string) error {
 	//    - Should user confirmation be required?
 	//    - Should removed events be logged?
 
-	return nil
+	return fmt.Errorf("WAL repair is not implemented; preserve the original file")
 }
 
 // TruncateWAL truncates WAL to specified sequence number
@@ -134,7 +112,7 @@ func TruncateWAL(path string, seq uint64) error {
 	// 4. Atomically replace old file
 	// 5. Warning: Ensure operation atomicity!
 
-	return nil
+	return fmt.Errorf("WAL truncation is not implemented")
 }
 
 // ============================================================================
@@ -147,14 +125,10 @@ func TruncateWAL(path string, seq uint64) error {
 // - Debugging
 // - Manual event inspection
 func DumpWAL(path string, w io.Writer) error {
-	// TODO: Implement WAL dump
-	// 1. Read all events
-	// 2. Format output:
-	//    [Seq:1] ENQUEUE job-001 at 2024-01-01T00:00:00 (checksum:0x12345678)
-	//    [Seq:2] DISPATCH job-001 at 2024-01-01T00:00:01 (checksum:0x87654321)
-	// 3. Mark corrupted events
-
-	return nil
+	return scanEvents(path, func(event Event) error {
+		_, err := fmt.Fprintf(w, "[%d] %s %s at %d checksum=%08x\n", event.Seq, event.Type, event.JobID, event.Timestamp, event.Checksum)
+		return err
+	})
 }
 
 // CompareWAL compares differences between two WAL files
@@ -163,14 +137,7 @@ func DumpWAL(path string, w io.Writer) error {
 // - Testing
 // - Verify Rotate correctness
 func CompareWAL(path1, path2 string) ([]string, error) {
-	// TODO: Implement WAL comparison (optional)
-	// 1. Read all events from both files
-	// 2. Compare:
-	//    - Event count
-	//    - Content of each event
-	// 3. Return difference list
-
-	return nil, nil
+	return nil, fmt.Errorf("WAL comparison is not implemented")
 }
 
 // ============================================================================
@@ -189,12 +156,24 @@ type WALStats struct {
 
 // GetWALStats retrieves WAL statistics
 func GetWALStats(path string) (*WALStats, error) {
-	// TODO: Implement statistics collection
-	// 1. Scan entire WAL
-	// 2. Collect various statistics
-	// 3. Return WALStats structure
-
-	return nil, nil
+	stats := &WALStats{EventTypes: make(map[EventType]int)}
+	err := scanEvents(path, func(event Event) error {
+		if stats.TotalEvents == 0 {
+			stats.FirstSeq = event.Seq
+			stats.TimeRange = [2]int64{event.Timestamp, event.Timestamp}
+		}
+		stats.TotalEvents++
+		stats.EventTypes[event.Type]++
+		stats.LastSeq = event.Seq
+		if event.Timestamp < stats.TimeRange[0] {
+			stats.TimeRange[0] = event.Timestamp
+		}
+		if event.Timestamp > stats.TimeRange[1] {
+			stats.TimeRange[1] = event.Timestamp
+		}
+		return nil
+	})
+	return stats, err
 }
 
 // TODO: Other utility tools to consider
@@ -214,3 +193,32 @@ func GetWALStats(path string) (*WALStats, error) {
 // 4. WAL Export:
 //    - Convert to other formats (CSV, Parquet)
 //    - For data analysis
+
+func scanEvents(path string, visit func(Event) error) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	var previous uint64
+	for {
+		var event Event
+		if err := decoder.Decode(&event); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("decode WAL: %w", err)
+		}
+		if !VerifyChecksum(event) {
+			return ErrChecksumMismatch
+		}
+		if event.Seq == 0 || (previous != 0 && event.Seq != previous+1) {
+			return fmt.Errorf("non-contiguous WAL sequence %d after %d", event.Seq, previous)
+		}
+		if err := visit(event); err != nil {
+			return err
+		}
+		previous = event.Seq
+	}
+}

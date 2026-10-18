@@ -9,6 +9,7 @@ import (
 // Task represents a task to execute
 type Task struct {
 	ID      types.JobID            // Task unique identifier
+	Attempt int                    // Attempt number assigned by the master
 	Payload map[string]interface{} // Data payload required for task execution
 	Timeout time.Duration          // Execution timeout duration
 }
@@ -16,6 +17,7 @@ type Task struct {
 // Result represents task execution result
 type Result struct {
 	JobID    types.JobID   // Task ID
+	Attempt  int           // Attempt number, used to fence stale acknowledgements
 	Success  bool          // Whether execution succeeded
 	Error    error         // Error message (if any)
 	Duration time.Duration // Actual execution time

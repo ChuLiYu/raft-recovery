@@ -1,14 +1,49 @@
 package controller
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ChuLiYu/raft-recovery/internal/storage/wal"
+	"github.com/ChuLiYu/raft-recovery/internal/worker"
 	"github.com/ChuLiYu/raft-recovery/pkg/types"
 )
+
+func TestStandaloneRetriesReplayDeadAttempt(t *testing.T) {
+	c, dir := createTestController(t)
+	defer os.RemoveAll(dir)
+	if err := c.EnqueueJobs([]types.Job{{ID: "retry", Payload: map[string]interface{}{"value": "retained"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < c.config.MaxRetry; attempt++ {
+		jobs, err := c.Poll(context.Background(), 1)
+		if err != nil || len(jobs) != 1 || jobs[0].Attempt != attempt {
+			t.Fatalf("dispatch attempt %d: jobs=%+v err=%v", attempt, jobs, err)
+		}
+		c.handleResult(worker.Result{JobID: "retry", Attempt: attempt, Success: false})
+	}
+	if job, ok := c.Job("retry"); !ok || job.Status != types.StatusDead || job.Attempt != 3 {
+		t.Fatalf("wrong final state: %+v %v", job, ok)
+	}
+	if err := c.wal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := NewController(c.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.wal.Close()
+	if err := restored.replayWAL(); err != nil {
+		t.Fatal(err)
+	}
+	job, ok := restored.Job("retry")
+	if !ok || job.Status != types.StatusDead || job.Attempt != 3 || job.Payload["value"] != "retained" {
+		t.Fatalf("replay lost dead state: %+v %v", job, ok)
+	}
+}
 
 // ============================================================================
 // Test Helper Functions
@@ -670,6 +705,12 @@ func TestReplayWAL(t *testing.T) {
 	controller.mu.Unlock()
 
 	// Since there are only Enqueue events, they should all be in the snapshot
+	if stats["pending"] != 2 {
+		t.Fatalf("replay restored %d pending jobs, want 2", stats["pending"])
+	}
+	if job, ok := controller.Job("task-001"); !ok || job.Payload["data"] != "test1" {
+		t.Fatalf("replay lost enqueued payload: %+v, exists=%v", job, ok)
+	}
 	t.Logf("Statistics after replay: %+v", stats)
 }
 

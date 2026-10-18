@@ -180,7 +180,10 @@ func (m *Manager) Write(data types.SnapshotData) error {
 		return fmt.Errorf("failed to sync snapshot: %w", err)
 	}
 
-	tmpFile.Close() // Close before rename
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to close snapshot: %w", err)
+	}
 
 	// 2. Atomic rename (critical step)
 	if err := os.Rename(tmpPath, m.path); err != nil {
@@ -189,6 +192,14 @@ func (m *Manager) Write(data types.SnapshotData) error {
 		return fmt.Errorf("failed to rename snapshot: %w", err)
 	}
 
+	directory, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open snapshot directory: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync snapshot directory: %w", err)
+	}
 	return nil
 }
 
