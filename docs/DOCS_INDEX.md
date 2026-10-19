@@ -4,6 +4,7 @@
 
 ## Current behavior
 
+- [OrbStack operations (Chinese)](guides/ORBSTACK.zh-CN.md): container-only build, run, test and cleanup through `./raftctl`.
 - [Project README](../README.md): build, cluster commands and failure demonstration.
 - [Phase 3 delivery audit](reports/PHASE3_DELIVERY.md): implemented features, verification, design decisions and gaps.
 - [Technical and interview notes (Chinese only)](guides/INTERVIEW_GUIDE.zh-CN.md): architecture, command lifecycle and safety arguments.

@@ -489,6 +489,7 @@ func enqueueJobs(filePath string, masterAddresses ...string) error {
 		}
 
 		successCount := 0
+		failureCount := 0
 		for _, j := range jobsInput {
 			payloadBytes, _ := json.Marshal(j.Payload)
 			var lastErr error
@@ -514,10 +515,14 @@ func enqueueJobs(filePath string, masterAddresses ...string) error {
 				lastErr = fmt.Errorf("master rejected job: %s", resp.ErrorMessage)
 			}
 			if lastErr != nil {
+				failureCount++
 				log.Printf("Failed to submit job %s: %v\n", j.ID, lastErr)
 			}
 		}
 		log.Printf("Successfully submitted %d/%d jobs to %s\n", successCount, len(jobsInput), masterAddr)
+		if failureCount > 0 {
+			return fmt.Errorf("submitted %d/%d jobs to %s; %d job(s) failed", successCount, len(jobsInput), masterAddr, failureCount)
+		}
 		return nil
 	}
 

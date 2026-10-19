@@ -7,7 +7,7 @@
 
 ## Documentation Structure
 
-Selected documents have English and Chinese versions. Technical/interview notes are maintained in Chinese only:
+Selected documents have English and Chinese versions. Technical/interview notes and the OrbStack operations guide are maintained in Chinese only:
 
 | Document | English | Chinese |
 |----------|---------|---------|
