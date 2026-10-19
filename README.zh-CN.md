@@ -14,6 +14,57 @@
 
 預設 executor 是以 `sleep_ms` 和失敗模擬展示流程的程式。接入實際業務時需提供 executor，並讓外部寫入具有冪等性。工作交付採 **at least once**；attempt fencing 保護的是佇列狀態，無法撤銷 worker 在當機前已造成的外部副作用。
 
+## 系統架構
+
+```mermaid
+flowchart TB
+    C["Client / CLI"]
+    W["Remote workers"]
+    API["Leader gRPC API"]
+
+    C -->|"Submit job"| API
+    W -->|"Register / heartbeat / poll / ACK"| API
+    API -->|"Dispatch committed job"| W
+
+    subgraph CLUSTER["Static three-node Raft cluster"]
+        direction LR
+        subgraph LEADER["Current leader"]
+            R["Custom Raft"]
+            Q["Queue FSM"]
+            D[("Raft state image: log + FSM snapshot")]
+            R -->|"After majority commit: ordered apply"| Q
+            R -->|"Persist term / vote / log / snapshot"| D
+        end
+        subgraph FOLLOWER1["Follower 1"]
+            R1["Raft replica"]
+            Q1["Queue FSM"]
+            D1[("Raft state image: log + FSM snapshot")]
+            R1 -->|"Apply committed entries"| Q1
+            R1 -->|"Persist before acknowledgment"| D1
+        end
+        subgraph FOLLOWER2["Follower 2"]
+            R2["Raft replica"]
+            Q2["Queue FSM"]
+            D2[("Raft state image: log + FSM snapshot")]
+            R2 -->|"Apply committed entries"| Q2
+            R2 -->|"Persist before acknowledgment"| D2
+        end
+        R -->|"AppendEntries / InstallSnapshot"| R1
+        R -->|"AppendEntries / InstallSnapshot"| R2
+        R1 -.->|"Replication acknowledgment"| R
+        R2 -.->|"Replication acknowledgment"| R
+    end
+
+    API -->|"Propose queue command"| R
+    Q -->|"Local apply completes: write may return success"| API
+```
+
+**寫入流程：** ENQUEUE、DISPATCH、ACK、TIMEOUT 都是複寫指令。成功回覆須等到**多數提交及本機 FSM 套用**。每個節點以持久化快照與已提交的日誌後綴還原 FSM。
+
+**故障接手：** 節點以 RequestVote 選出新 leader；圖中的角色會隨選舉改變。client 與 worker 輪替 seed 位址並重新連線。註冊與 heartbeat 是可重建的 soft state；派工歸屬與 attempt 則經過複寫。worker 執行語意仍是 **at least once**。
+
+圖示為 **master 模式**；單機模式另採 WAL＋快照恢復。指令生命週期與設計決策請見[技術筆記](docs/INTERVIEW_GUIDE.zh-CN.md)。
+
 ## 啟動真正的三個 master
 
 需要 Go 1.23+；protobuf 產物已提交，只有修改 schema 才需要 `protoc`。
