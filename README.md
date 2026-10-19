@@ -14,6 +14,24 @@ A Go job queue built in three stages: durable local execution, remote workers ov
 
 The default executor is a **simulation** (`sleep_ms` and optional failure), suitable for demonstrations. Applications need their own executor and external idempotency strategy. Worker delivery is **at least once**: fencing protects queue state, but cannot undo an external effect performed before a crash.
 
+## Run and test with OrbStack
+
+Install OrbStack and clone this repository. All Go compilation, dependencies, tests and runtime data stay in Linux containers; macOS needs no Go or protoc installation.
+
+```bash
+./raftctl doctor
+./raftctl setup                    # Build runtime and development tools in OrbStack
+./raftctl up                       # Three masters and a remote worker
+./raftctl enqueue test/jobs.json
+./raftctl status
+./raftctl test                     # Full tests, race, vet and cross-container recovery
+./raftctl down                     # Keep persisted queue data
+```
+
+`./raftctl e2e` runs just the isolated cross-container failure test. Use `./raftctl logs` to inspect services. `./raftctl reset --yes` deletes this project's queue data; `./raftctl purge --yes` also removes its tool caches and images. Neither command performs a global Docker prune.
+
+The default Docker context is explicitly `orbstack`. Each master has its own volume, and E2E uses a separate Compose project. This is a local container cluster in one Linux VM. See the [operations guide](docs/guides/ORBSTACK.zh-CN.md) for command details, persistence and cleanup.
+
 ## Architecture
 
 ```mermaid
@@ -65,9 +83,9 @@ flowchart TB
 
 The diagram shows **master mode**. Standalone mode uses a separate WAL + snapshot recovery path.
 
-## Run a real three-master cluster
+## Native three-master commands (optional reference)
 
-Requires Go 1.23+; committed protobuf bindings mean `protoc` is only needed when changing the schema.
+The recommended OrbStack workflow above does not need host Go. The following native commands are retained for other environments with Go 1.23+; committed protobuf bindings mean `protoc` is only needed when changing the schema.
 
 ```bash
 go build -o bin/beaver-raft ./cmd/queue

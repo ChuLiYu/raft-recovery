@@ -14,6 +14,24 @@
 
 預設 executor 是以 `sleep_ms` 和失敗模擬展示流程的程式。接入實際業務時需提供 executor，並讓外部寫入具有冪等性。工作交付採 **at least once**；attempt fencing 保護的是佇列狀態，無法撤銷 worker 在當機前已造成的外部副作用。
 
+## 使用 OrbStack 執行與測試
+
+安裝 OrbStack 並取得此 repo 後，統一使用 `./raftctl`。Go 編譯、相依套件、測試與執行資料都留在 Linux 容器內，macOS 不需安裝 Go 或 protoc。
+
+```bash
+./raftctl doctor
+./raftctl setup                    # 在 OrbStack 建置程式與開發工具
+./raftctl up                       # 啟動三個 master 與遠端 worker
+./raftctl enqueue test/jobs.json
+./raftctl status
+./raftctl test                     # 全套測試、race、vet 與跨容器恢復測試
+./raftctl down                     # 停止服務，保留佇列資料
+```
+
+`./raftctl e2e` 可單獨執行隔離的跨容器故障測試；`./raftctl logs` 查看服務紀錄。`./raftctl reset --yes` 刪除本專案佇列資料；`./raftctl purge --yes` 另外移除本專案工具快取與映像。兩者都不會執行全域 Docker prune。
+
+預設明確使用 `orbstack` Docker context；每個 master 有自己的資料卷，E2E 另用隔離的 Compose project。這是在單一 Linux VM 中運作的本機容器叢集。詳細操作、持久化與清理方式見 [OrbStack 管理指南](docs/guides/ORBSTACK.zh-CN.md)。
+
 ## 系統架構
 
 ```mermaid
@@ -65,9 +83,9 @@ flowchart TB
 
 圖示為 **master 模式**；單機模式另採 WAL＋快照恢復。
 
-## 啟動真正的三個 master
+## 主機原生三節點指令（選用參考）
 
-需要 Go 1.23+；protobuf 產物已提交，只有修改 schema 才需要 `protoc`。
+建議使用上方不需主機 Go 的 OrbStack 流程。以下原生指令保留給已備妥 Go 1.23+ 的其他環境參考；protobuf 產物已提交，只有修改 schema 才需要 `protoc`。
 
 ```bash
 go build -o bin/beaver-raft ./cmd/queue

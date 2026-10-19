@@ -4,6 +4,7 @@
 
 ## 目前行為
 
+- [OrbStack 操作與環境管理](guides/ORBSTACK.zh-CN.md)：以 `./raftctl` 統一建置、執行、測試與清理。
 - [專案 README](../README.zh-CN.md)：建置、叢集指令與故障示範。
 - [Phase 3 交付盤點](reports/PHASE3_DELIVERY.zh-CN.md)：已實作功能、驗證、決策與缺口。
 - [技術理解與面試準備（僅中文版）](guides/INTERVIEW_GUIDE.zh-CN.md)：架構、指令生命週期與安全性說明。

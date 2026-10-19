@@ -1,0 +1,72 @@
+name: ${RAFT_PROJECT_NAME:-raft-recovery}
+
+x-master: &master
+  image: ${RAFT_PROJECT_NAME:-raft-recovery}:local
+  build:
+    context: .
+    target: runtime
+  command: ["--config", "/etc/raft/container.yaml", "run", "--mode", "master", "--port", "50051", "--peers", "master1:50051,master2:50051,master3:50051", "--data-dir", "/data", "--listen", ":50051"]
+  expose:
+    - "50051"
+  networks:
+    - raft
+
+services:
+  master1:
+    <<: *master
+    command: ["--config", "/etc/raft/container.yaml", "run", "--mode", "master", "--port", "50051", "--node-id", "master1:50051", "--peers", "master1:50051,master2:50051,master3:50051", "--data-dir", "/data", "--listen", ":50051"]
+    volumes:
+      - master1-data:/data
+  master2:
+    <<: *master
+    command: ["--config", "/etc/raft/container.yaml", "run", "--mode", "master", "--port", "50051", "--node-id", "master2:50051", "--peers", "master1:50051,master2:50051,master3:50051", "--data-dir", "/data", "--listen", ":50051"]
+    volumes:
+      - master2-data:/data
+  master3:
+    <<: *master
+    command: ["--config", "/etc/raft/container.yaml", "run", "--mode", "master", "--port", "50051", "--node-id", "master3:50051", "--peers", "master1:50051,master2:50051,master3:50051", "--data-dir", "/data", "--listen", ":50051"]
+    volumes:
+      - master3-data:/data
+  worker:
+    image: ${RAFT_PROJECT_NAME:-raft-recovery}:local
+    build:
+      context: .
+      target: runtime
+    command: ["--config", "/etc/raft/container.yaml", "run", "--mode", "worker", "--master", "master1:50051,master2:50051,master3:50051"]
+    networks:
+      - raft
+    depends_on:
+      - master1
+      - master2
+      - master3
+  cli:
+    image: ${RAFT_PROJECT_NAME:-raft-recovery}:local
+    build:
+      context: .
+      target: runtime
+    profiles: ["cli"]
+    command: ["enqueue", "--file", "/input/jobs.json", "--master", "master1:50051,master2:50051,master3:50051"]
+    volumes:
+      - "${RAFT_JOBS_FILE:-./test/jobs.json}:/input/jobs.json:ro"
+    networks:
+      - raft
+  tools:
+    image: ${RAFT_PROJECT_NAME:-raft-recovery}-tools:local
+    build:
+      context: .
+      target: tools
+    profiles: ["tools"]
+    entrypoint: ["/bin/bash"]
+    working_dir: /src
+    volumes:
+      - tools-cache:/home/raft/.cache/go-build
+
+networks:
+  raft:
+    driver: bridge
+
+volumes:
+  master1-data:
+  master2-data:
+  master3-data:
+  tools-cache:

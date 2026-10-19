@@ -1,14 +1,50 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	pb "github.com/ChuLiYu/raft-recovery/api/proto/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+type enqueueTestServer struct {
+	pb.UnimplementedFalconQueueServiceServer
+	responses map[string]bool
+	failures  map[string]error
+}
+
+func (s *enqueueTestServer) SubmitJob(_ context.Context, req *pb.SubmitJobRequest) (*pb.SubmitJobResponse, error) {
+	if err := s.failures[req.JobId]; err != nil {
+		return nil, err
+	}
+	accepted := s.responses[req.JobId]
+	response := &pb.SubmitJobResponse{Success: accepted}
+	if !accepted {
+		response.ErrorMessage = "rejected by test server"
+	}
+	return response, nil
+}
+
+func startEnqueueTestServer(t *testing.T, service *enqueueTestServer) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	pb.RegisterFalconQueueServiceServer(server, service)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop() })
+	return listener.Addr().String()
+}
 
 func TestBuildCLI(t *testing.T) {
 	cmd := BuildCLI()
@@ -237,6 +273,59 @@ func TestEnqueueJobs_InvalidJSON(t *testing.T) {
 
 	assert.Error(t, err, "enqueueJobs should return error for invalid JSON")
 	assert.Contains(t, err.Error(), "failed to parse job file", "Error should mention JSON parsing failure")
+}
+
+func TestEnqueueJobs_RemoteSubmissionResults(t *testing.T) {
+	tests := []struct {
+		name      string
+		service   *enqueueTestServer
+		wantError string
+	}{
+		{
+			name: "all jobs accepted",
+			service: &enqueueTestServer{responses: map[string]bool{
+				"job-1": true,
+				"job-2": true,
+			}},
+		},
+		{
+			name: "partial rejection returns error",
+			service: &enqueueTestServer{responses: map[string]bool{
+				"job-1": true,
+			}, failures: map[string]error{}},
+			wantError: "submitted 1/2 jobs",
+		},
+		{
+			name: "remote RPC failure returns error",
+			service: &enqueueTestServer{responses: map[string]bool{}, failures: map[string]error{
+				"job-1": status.Error(codes.Unavailable, "temporarily unavailable"),
+				"job-2": status.Error(codes.Unavailable, "temporarily unavailable"),
+			}},
+			wantError: "submitted 0/2 jobs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			address := startEnqueueTestServer(t, tt.service)
+			jobFile := filepath.Join(t.TempDir(), "jobs.json")
+			jobs := []map[string]interface{}{
+				{"id": "job-1", "payload": map[string]interface{}{"value": "one"}},
+				{"id": "job-2", "payload": map[string]interface{}{"value": "two"}},
+			}
+			data, err := json.Marshal(jobs)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(jobFile, data, 0600))
+
+			err = enqueueJobs(jobFile, address)
+			if tt.wantError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantError)
+		})
+	}
 }
 
 func TestShowStatus(t *testing.T) {

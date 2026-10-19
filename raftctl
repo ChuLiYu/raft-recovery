@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CONTEXT="${RAFT_DOCKER_CONTEXT:-orbstack}"
+PROJECT="${RAFT_PROJECT_NAME:-raft-recovery}"
+export RAFT_DOCKER_CONTEXT="$CONTEXT" RAFT_PROJECT_NAME="$PROJECT"
+
+usage() {
+  cat <<'EOF'
+Usage: ./raftctl COMMAND [ARGS]
+
+Commands:
+  doctor                 Check Docker context, Linux engine, and Compose
+  setup | build          Build runtime and tools images inside Docker
+  up                     Build and start the three masters and worker
+  status                 Show this project's containers
+  logs [SERVICE...]      Follow this project's logs
+  enqueue FILE           Submit jobs from a host JSON file
+  test                   Run Go tests, race, vet, build, and E2E in Linux
+  e2e                    Run isolated failure-recovery E2E
+  proto                  Regenerate checked-in Go bindings in tools container
+  down                   Stop containers and network, preserving volumes
+  reset --yes            Remove this project's containers, network, and data
+  purge --yes            Reset and remove this project's images and Go cache volume
+                          Shared Docker BuildKit layer cache is retained
+
+Environment:
+  RAFT_DOCKER_CONTEXT    Docker context (default: orbstack)
+  RAFT_PROJECT_NAME      Compose project name (default: raft-recovery)
+  RAFT_E2E_PROJECT       Disposable E2E project (default: raft-recovery-e2e)
+EOF
+}
+
+dc() {
+  docker --context "$CONTEXT" compose --project-directory "$ROOT" \
+    --project-name "$PROJECT" -f "$ROOT/compose.yaml" "$@"
+}
+
+require_yes() {
+  local action="$1"
+  if [[ "${2:-}" != "--yes" ]]; then
+    printf 'Refusing %s without explicit --yes.\n' "$action" >&2
+    exit 2
+  fi
+  if [[ $# -gt 2 ]]; then
+    printf 'Unexpected arguments.\n' >&2
+    exit 2
+  fi
+}
+
+check_docker() {
+  command -v docker >/dev/null 2>&1 || { printf 'docker CLI not found.\n' >&2; exit 1; }
+}
+
+doctor() {
+  check_docker
+  docker context inspect "$CONTEXT" >/dev/null || {
+    printf 'Docker context %q is unavailable. Set RAFT_DOCKER_CONTEXT to a configured context.\n' "$CONTEXT" >&2
+    return 1
+  }
+  docker --context "$CONTEXT" info --format '{{.OSType}} {{.Architecture}}' | {
+    read -r os arch
+    if [[ "$os" != linux ]]; then
+      printf 'Expected a Linux Docker engine, got %q (%s).\n' "$os" "$arch" >&2
+      exit 1
+    fi
+    printf 'Docker context: %s\nLinux engine: %s/%s\n' "$CONTEXT" "$os" "$arch"
+  }
+  docker --context "$CONTEXT" compose version
+  dc config --quiet
+}
+
+compose_build() {
+  dc build cli tools
+}
+
+check_e2e_project() {
+  local e2e_project="${RAFT_E2E_PROJECT:-raft-recovery-e2e}"
+  local e2e_compose=(docker --context "$CONTEXT" compose --project-directory "$ROOT" \
+    --project-name "$e2e_project" -f "$ROOT/compose.yaml")
+  local containers volumes networks
+
+  if [[ "$e2e_project" == "$PROJECT" ]]; then
+    printf 'Refusing E2E: RAFT_E2E_PROJECT (%s) matches RAFT_PROJECT_NAME (%s).\n' \
+      "$e2e_project" "$PROJECT" >&2
+    return 1
+  fi
+
+  # E2E always tears down its own volumes. Require a fresh disposable project,
+  # including when it has only stopped containers or orphaned Compose volumes.
+  containers="$("${e2e_compose[@]}" ps --all --quiet)"
+  volumes="$(docker --context "$CONTEXT" volume ls --quiet \
+    --filter "label=com.docker.compose.project=$e2e_project")"
+  networks="$(docker --context "$CONTEXT" network ls --quiet \
+    --filter "label=com.docker.compose.project=$e2e_project")"
+  if [[ -n "$containers" || -n "$volumes" || -n "$networks" ]]; then
+    printf 'Refusing E2E: project %s already has containers, volumes, or networks. Choose a fresh RAFT_E2E_PROJECT or remove that disposable project first.\n' \
+      "$e2e_project" >&2
+    return 1
+  fi
+  export RAFT_E2E_PROJECT="$e2e_project"
+}
+
+run_test_suite() {
+  dc run --rm -T --no-deps tools -c \
+    'go test -count=1 ./... -timeout 180s && go test -race -count=1 ./... -timeout 240s && go vet ./... && go build ./cmd/queue'
+}
+
+[[ $# -gt 0 ]] || { usage; exit 2; }
+command="$1"
+shift
+
+case "$command" in
+  -h|--help|help) usage ;;
+  doctor)
+    [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+    doctor
+    ;;
+  setup|build)
+    [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+    check_docker
+    compose_build
+    ;;
+  up)
+    [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+    check_docker
+    dc up --build -d master1 master2 master3 worker
+    ;;
+  status)
+    check_docker
+    dc ps "$@"
+    ;;
+  logs)
+    check_docker
+    dc logs --follow "$@"
+    ;;
+  enqueue)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    check_docker
+    [[ -f "$1" && -r "$1" ]] || { printf 'Job file is not readable: %s\n' "$1" >&2; exit 2; }
+    export RAFT_JOBS_FILE="$(cd -- "$(dirname -- "$1")" && pwd)/$(basename -- "$1")"
+    dc --profile cli run --rm -T --no-deps cli
+    ;;
+  test)
+    [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+    check_docker
+    check_e2e_project
+    compose_build
+    run_test_suite
+    bash "$ROOT/scripts/orbstack-e2e.sh"
+    ;;
+  e2e)
+    [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+    check_docker
+    check_e2e_project
+    compose_build
+    bash "$ROOT/scripts/orbstack-e2e.sh"
+    ;;
+  proto)
+    [[ $# -eq 0 ]] || { printf 'proto regenerates the checked-in Go files for api/proto/v1/service.proto; it accepts no arguments.\n' >&2; exit 2; }
+    check_docker
+    compose_build
+    dc --profile tools run --rm -T --no-deps \
+      --volume "$ROOT/api/proto:/src/api/proto" tools -c \
+      'protoc -I . --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/proto/v1/service.proto'
+    ;;
+  down)
+    [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+    check_docker
+    dc down --remove-orphans
+    ;;
+  reset)
+    require_yes reset "$@"
+    check_docker
+    dc down --volumes --remove-orphans
+    ;;
+  purge)
+    require_yes purge "$@"
+    check_docker
+    dc down --volumes --remove-orphans
+    docker --context "$CONTEXT" info >/dev/null
+    for image in "$PROJECT:local" "$PROJECT-tools:local"; do
+      if image_id="$(docker --context "$CONTEXT" image ls --quiet "$image")"; then
+        if [[ -n "$image_id" ]]; then
+          docker --context "$CONTEXT" image rm "$image"
+        else
+          printf 'Image already absent: %s\n' "$image"
+        fi
+      else
+        exit 1
+      fi
+    done
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

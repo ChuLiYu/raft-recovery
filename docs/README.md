@@ -6,6 +6,7 @@ Start with the [project README](../README.md) for build and cluster commands, th
 
 ## 目前實作 / Current implementation
 
+- [OrbStack 操作與環境管理](guides/ORBSTACK.zh-CN.md)：用單一腳本建置、執行、測試與清理；[遷移規格](planning/ORBSTACK_MIGRATION_PLAN.zh-CN.md)、[驗收報告](reports/ORBSTACK_VALIDATION.zh-CN.md)。
 - [Phase 3 交付盤點](reports/PHASE3_DELIVERY.zh-CN.md) · [English](reports/PHASE3_DELIVERY.md)：功能、驗證結果、重要取捨與待補功能。
 - [技術理解與面試準備（僅中文版）](guides/INTERVIEW_GUIDE.zh-CN.md)：Raft 安全性、請求生命週期、設計決策與專案表達。
 

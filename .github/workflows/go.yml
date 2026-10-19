@@ -8,17 +8,17 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  linux-docker-test:
+    name: Linux containers (GitHub Actions Docker)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RAFT_DOCKER_CONTEXT: default
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Test with race detector
-        run: go test -race ./... -timeout 180s
-      - name: Vet
-        run: go vet ./...
-      - name: Build queue
-        run: go build ./cmd/queue
+      - name: Check Docker environment
+        run: ./raftctl doctor
+      - name: Build container images
+        run: ./raftctl setup
+      - name: Run Linux container tests
+        run: ./raftctl test
