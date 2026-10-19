@@ -1,6 +1,6 @@
 # Phase 3 實作盤點與交付規格
 
-[English](PHASE3_DELIVERY.md) · [技術／面試筆記](INTERVIEW_GUIDE.zh-CN.md) · [啟動叢集](../README.zh-CN.md)
+[English](PHASE3_DELIVERY.md) · [技術／面試筆記](../guides/INTERVIEW_GUIDE.zh-CN.md) · [啟動叢集](../../README.zh-CN.md)
 
 盤點日期：2026-10-18。基準：`ChuLiYu/raft-recovery`，main commit `c6a8c283431e8cc9ec9aa9324e4344734fbcd9db`。本文件把原始 roadmap／各階段計畫與可執行程式逐一對照。原計畫保留為歷史文件，其中未勾選的方框不是目前進度表。
 
@@ -89,12 +89,12 @@ Raft 寫入順序：暫存檔→file fsync→close→rename→directory fsync。
 | P3 | 動態成員、pre-vote／check-quorum、快照傳輸優化 | 超出固定本機叢集的營運／可用性 | joint consensus、learner 追趕、取消／背壓、分塊 snapshot |
 | 研究延伸 | Beaver 重現、geo-latency 實驗 | 完成原研究里程碑前仍必要 | 定義外部流量假設、一致 partial cut／重播證明、可比較 baseline、可重現實驗 |
 
-Phase 3 功能核心可運行，不代表效能目標、研究延伸和正式環境強化也完成。[面試筆記](INTERVIEW_GUIDE.zh-CN.md)提供能準確表達這些取捨的說法。
+Phase 3 功能核心可運行，不代表效能目標、研究延伸和正式環境強化也完成。[面試筆記](../guides/INTERVIEW_GUIDE.zh-CN.md)提供能準確表達這些取捨的說法。
 
 ## 參考與閱讀順序
 
-1. [README](../README.zh-CN.md)：建置、叢集啟動與故障展示。
-2. [面試筆記](INTERVIEW_GUIDE.zh-CN.md)：架構、請求生命週期、安全規則與準備題目。
+1. [README](../../README.zh-CN.md)：建置、叢集啟動與故障展示。
+2. [面試筆記](../guides/INTERVIEW_GUIDE.zh-CN.md)：架構、請求生命週期、安全規則與準備題目。
 3. `internal/raft/raft.go`、`rpc.go`、`persistent.go`；`internal/jobmanager/replicated.go`；`internal/controller/controller.go`。
-4. [原 Phase 3 計畫](planning/PHASE3_IMPLEMENTATION_PLAN.md)、[階段規格](phases/phase3-beaver-raft.md)、[roadmap](../roadmap.md)。
+4. [原 Phase 3 計畫](../planning/PHASE3_IMPLEMENTATION_PLAN.md)、[階段規格](../phases/phase3-beaver-raft.md)、[roadmap](../../roadmap.md)。
 5. [Raft paper](https://raft.github.io/raft.pdf)、[Beaver, OSDI 2024](https://www.usenix.org/conference/osdi24/presentation/yu)。

@@ -1,6 +1,6 @@
 # Raft Recovery
 
-[中文](README.zh-CN.md) · [Implementation audit](docs/PHASE3_DELIVERY.md) · [Technical / interview guide](docs/INTERVIEW_GUIDE.md)
+[中文](README.zh-CN.md) · [Implementation audit](docs/reports/PHASE3_DELIVERY.md) · [Documentation](docs/README.md)
 
 A Go job queue built in three stages: durable local execution, remote workers over gRPC, and a replicated queue using a custom Raft implementation. This is an educational systems project with tested recovery paths, not a production service.
 
@@ -13,6 +13,57 @@ A Go job queue built in three stages: durable local execution, remote workers ov
 - Snapshots preserve FIFO order, active jobs, complete dead letters and completed-job tombstones. Retrying a job ID does not enqueue another job, including after compaction/restart. IDs must identify the same logical request; a duplicate does not replace its payload.
 
 The default executor is a **simulation** (`sleep_ms` and optional failure), suitable for demonstrations. Applications need their own executor and external idempotency strategy. Worker delivery is **at least once**: fencing protects queue state, but cannot undo an external effect performed before a crash.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    C["Client / CLI"]
+    W["Remote workers"]
+    API["Leader gRPC API"]
+
+    C -->|"Submit job"| API
+    W -->|"Register / heartbeat / poll / ACK"| API
+    API -->|"Dispatch committed job"| W
+
+    subgraph CLUSTER["Static three-node Raft cluster"]
+        direction LR
+        subgraph LEADER["Current leader"]
+            R["Custom Raft"]
+            Q["Queue FSM"]
+            D[("Raft state image: log + FSM snapshot")]
+            R -->|"After majority commit: ordered apply"| Q
+            R -->|"Persist term / vote / log / snapshot"| D
+        end
+        subgraph FOLLOWER1["Follower 1"]
+            R1["Raft replica"]
+            Q1["Queue FSM"]
+            D1[("Raft state image: log + FSM snapshot")]
+            R1 -->|"Apply committed entries"| Q1
+            R1 -->|"Persist before acknowledgment"| D1
+        end
+        subgraph FOLLOWER2["Follower 2"]
+            R2["Raft replica"]
+            Q2["Queue FSM"]
+            D2[("Raft state image: log + FSM snapshot")]
+            R2 -->|"Apply committed entries"| Q2
+            R2 -->|"Persist before acknowledgment"| D2
+        end
+        R -->|"AppendEntries / InstallSnapshot"| R1
+        R -->|"AppendEntries / InstallSnapshot"| R2
+        R1 -.->|"Replication acknowledgment"| R
+        R2 -.->|"Replication acknowledgment"| R
+    end
+
+    API -->|"Propose queue command"| R
+    Q -->|"Local apply completes: write may return success"| API
+```
+
+**Write path:** ENQUEUE, DISPATCH, ACK and TIMEOUT are replicated commands. Success waits for **majority commit and local FSM application**. Each node restores its FSM from its persisted snapshot and committed log suffix.
+
+**Failover:** peers elect a new leader using RequestVote; the roles above can move between nodes. Clients and workers rotate through seed addresses and reconnect. Registration and heartbeats are rebuildable soft state; job ownership and attempts are replicated. Worker execution remains **at least once**.
+
+The diagram shows **master mode**. Standalone mode uses a separate WAL + snapshot recovery path.
 
 ## Run a real three-master cluster
 
@@ -81,4 +132,4 @@ The integration test uses real gRPC connections and covers follower rejection, w
 - Worker registration is rebuildable soft state, rather than another replicated command. Dispatch ownership and attempts are durable. Metrics/CLI status do not yet provide a complete live cluster monitoring interface.
 - No TLS/authentication, bounded retention, automatic corrupt-state repair, deployment orchestration or proven linearizable query API. Use only trusted networks for the demo.
 
-For the theory behind the consensus rules, see the [Raft paper](https://raft.github.io/raft.pdf). Original phase documents under `docs/phases/` and `docs/planning/` preserve historical intent; the current behavior and deviations are recorded in [the delivery audit](docs/PHASE3_DELIVERY.md).
+For the theory behind the consensus rules, see the [Raft paper](https://raft.github.io/raft.pdf). Original phase documents under `docs/phases/` and `docs/planning/` preserve historical intent; the current behavior and deviations are recorded in [the delivery audit](docs/reports/PHASE3_DELIVERY.md).
