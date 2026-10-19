@@ -1,6 +1,6 @@
 # Phase 3 implementation audit and delivery contract
 
-[中文](PHASE3_DELIVERY.zh-CN.md) · [Interview guide](INTERVIEW_GUIDE.md) · [Run the cluster](../README.md)
+[中文](PHASE3_DELIVERY.zh-CN.md) · [Interview guide](../guides/INTERVIEW_GUIDE.zh-CN.md) · [Run the cluster](../../README.md)
 
 Audit date: 2026-10-18. Baseline: `ChuLiYu/raft-recovery`, main commit `c6a8c283431e8cc9ec9aa9324e4344734fbcd9db`. This report compares the original roadmap and phase plans with executable code. Original planning documents remain historical records; unchecked boxes there are not a live progress tracker.
 
@@ -89,12 +89,12 @@ The first whole-repository race attempt was blocked by sandbox loopback-bind res
 | P3 | Dynamic membership, pre-vote/check-quorum, optimized snapshot transfer | Improves operation and availability beyond a fixed local cluster | Safe joint-consensus transitions, learner catch-up, cancellation/backpressure and chunked snapshot transport |
 | Research extension | Beaver reproduction and geo-latency study | Required before claiming the original research milestone complete | Define external traffic assumptions, consistent partial cut/replay proof, comparable baselines and repeatable experiments |
 
-Do not treat performance targets, research extensions or production hardening as completed because the Phase 3 functional core works. The [interview guide](INTERVIEW_GUIDE.md) provides a precise pitch and explains the tradeoffs without those claims.
+Do not treat performance targets, research extensions or production hardening as completed because the Phase 3 functional core works. The [interview guide](../guides/INTERVIEW_GUIDE.zh-CN.md) provides a precise pitch and explains the tradeoffs without those claims.
 
 ## References and reading order
 
-1. [README](../README.md): build, cluster commands and failure demonstration.
-2. [Interview guide](INTERVIEW_GUIDE.md): architecture, request lifecycle, safety rules and interview questions.
+1. [README](../../README.md): build, cluster commands and failure demonstration.
+2. [Interview guide](../guides/INTERVIEW_GUIDE.zh-CN.md): architecture, request lifecycle, safety rules and interview questions.
 3. `internal/raft/raft.go`, `rpc.go`, `persistent.go`; `internal/jobmanager/replicated.go`; `internal/controller/controller.go`.
-4. [Original Phase 3 plan](planning/PHASE3_IMPLEMENTATION_PLAN.md), [phase specification](phases/phase3-beaver-raft.md), [roadmap](../roadmap.md).
+4. [Original Phase 3 plan](../planning/PHASE3_IMPLEMENTATION_PLAN.md), [phase specification](../phases/phase3-beaver-raft.md), [roadmap](../../roadmap.md).
 5. [Raft paper](https://raft.github.io/raft.pdf) and [Beaver, OSDI 2024](https://www.usenix.org/conference/osdi24/presentation/yu).

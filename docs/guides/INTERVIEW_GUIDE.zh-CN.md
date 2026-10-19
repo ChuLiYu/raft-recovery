@@ -1,6 +1,6 @@
 # Raft Recovery：技術理解與面試準備
 
-對照 [English](INTERVIEW_GUIDE.md)。目前功能與缺口以 [Phase 3 交付盤點](PHASE3_DELIVERY.zh-CN.md)為準；原階段文件是設計歷史。
+目前功能與缺口以 [Phase 3 交付盤點](../reports/PHASE3_DELIVERY.zh-CN.md)為準；原階段文件是設計歷史。
 
 ## 先把作品說清楚
 

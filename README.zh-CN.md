@@ -1,6 +1,6 @@
 # Raft Recovery
 
-[English](README.md) · [實作盤點](docs/PHASE3_DELIVERY.zh-CN.md) · [技術與面試筆記](docs/INTERVIEW_GUIDE.zh-CN.md)
+[English](README.md) · [實作盤點](docs/reports/PHASE3_DELIVERY.zh-CN.md) · [文件](docs/README.md)
 
 這是一個以 Go 實作的工作佇列，從單機持久化、gRPC 遠端 worker，逐步做到自製 Raft 的多節點複寫。定位是可驗證恢復流程的系統工程作品；正式上線能力仍有待補足。
 
@@ -63,7 +63,7 @@ flowchart TB
 
 **故障接手：** 節點以 RequestVote 選出新 leader；圖中的角色會隨選舉改變。client 與 worker 輪替 seed 位址並重新連線。註冊與 heartbeat 是可重建的 soft state；派工歸屬與 attempt 則經過複寫。worker 執行語意仍是 **at least once**。
 
-圖示為 **master 模式**；單機模式另採 WAL＋快照恢復。指令生命週期與設計決策請見[技術筆記](docs/INTERVIEW_GUIDE.zh-CN.md)。
+圖示為 **master 模式**；單機模式另採 WAL＋快照恢復。
 
 ## 啟動真正的三個 master
 
@@ -132,4 +132,4 @@ go test ./test/integration -run TestRaftClusterDurableFailover -count=3
 - worker 註冊採可重建 soft state；派工歸屬與 attempt 才持久化。metrics／CLI status 尚非完整線上叢集監控介面。
 - 尚無 TLS／認證、有界歷史保留、自動損毀修復、部署編排或已證明的線性一致查詢 API。展示請使用可信任網路。
 
-共識規則參考 [Raft 原論文](https://raft.github.io/raft.pdf)。`docs/phases/` 與 `docs/planning/` 留存原先規劃；目前行為和偏離原計畫之處，以[實作盤點](docs/PHASE3_DELIVERY.zh-CN.md)為準。
+共識規則參考 [Raft 原論文](https://raft.github.io/raft.pdf)。`docs/phases/` 與 `docs/planning/` 留存原先規劃；目前行為和偏離原計畫之處，以[實作盤點](docs/reports/PHASE3_DELIVERY.zh-CN.md)為準。

@@ -1,6 +1,6 @@
 # Raft Recovery
 
-[中文](README.zh-CN.md) · [Implementation audit](docs/PHASE3_DELIVERY.md) · [Technical / interview guide](docs/INTERVIEW_GUIDE.md)
+[中文](README.zh-CN.md) · [Implementation audit](docs/reports/PHASE3_DELIVERY.md) · [Documentation](docs/README.md)
 
 A Go job queue built in three stages: durable local execution, remote workers over gRPC, and a replicated queue using a custom Raft implementation. This is an educational systems project with tested recovery paths, not a production service.
 
@@ -63,7 +63,7 @@ flowchart TB
 
 **Failover:** peers elect a new leader using RequestVote; the roles above can move between nodes. Clients and workers rotate through seed addresses and reconnect. Registration and heartbeats are rebuildable soft state; job ownership and attempts are replicated. Worker execution remains **at least once**.
 
-The diagram shows **master mode**. Standalone mode uses a separate WAL + snapshot recovery path. See the [technical guide](docs/INTERVIEW_GUIDE.md) for command lifecycles and design decisions.
+The diagram shows **master mode**. Standalone mode uses a separate WAL + snapshot recovery path.
 
 ## Run a real three-master cluster
 
@@ -132,4 +132,4 @@ The integration test uses real gRPC connections and covers follower rejection, w
 - Worker registration is rebuildable soft state, rather than another replicated command. Dispatch ownership and attempts are durable. Metrics/CLI status do not yet provide a complete live cluster monitoring interface.
 - No TLS/authentication, bounded retention, automatic corrupt-state repair, deployment orchestration or proven linearizable query API. Use only trusted networks for the demo.
 
-For the theory behind the consensus rules, see the [Raft paper](https://raft.github.io/raft.pdf). Original phase documents under `docs/phases/` and `docs/planning/` preserve historical intent; the current behavior and deviations are recorded in [the delivery audit](docs/PHASE3_DELIVERY.md).
+For the theory behind the consensus rules, see the [Raft paper](https://raft.github.io/raft.pdf). Original phase documents under `docs/phases/` and `docs/planning/` preserve historical intent; the current behavior and deviations are recorded in [the delivery audit](docs/reports/PHASE3_DELIVERY.md).

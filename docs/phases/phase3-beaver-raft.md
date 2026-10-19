@@ -1,6 +1,6 @@
 # Phase 3 — Beaver-Raft (Consensus + Partial Snapshot)
 
-> **Status (2026-10-18): Historical design proposal.** This document records the original intent, not the delivered behavior. For current implementation, verification, and limitations, see the [Phase 3 delivery audit](../PHASE3_DELIVERY.md) ([中文](../PHASE3_DELIVERY.zh-CN.md)).
+> **Status (2026-10-18): Historical design proposal.** This document records the original intent, not the delivered behavior. For current implementation, verification, and limitations, see the [Phase 3 delivery audit](../reports/PHASE3_DELIVERY.md) ([中文](../reports/PHASE3_DELIVERY.zh-CN.md)).
 
 ## White Paper (High-Level Design)
 
